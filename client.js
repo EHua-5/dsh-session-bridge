@@ -30,14 +30,14 @@ window.__ModuleLoader__.load({
       'model.label': '允许其他会话更换本会话的模型',
       'model.infoLabel': '关于允许其他会话操作本会话',
       'model.description':
-        '开启后，其他会话可以：给本会话换模型、给本会话发消息。关闭后这些操作会被拒绝；本会话自己改自己的模型不受影响。',
+        '开启后，其他会话可以给本会话换模型；关闭后这些调用会被拒绝。本会话自己改自己的模型不受影响。给本会话发消息不受这个开关限制。',
       'model.failed': '没能保存开关：{message}',
     };
     const en = {
       'model.label': 'Allow other sessions to change this one',
       'model.infoLabel': 'About letting other sessions act on this one',
       'model.description':
-        'When on, other sessions can switch this session model and message it. When off, those calls are refused; this session can still change its own model.',
+        "When on, other sessions can switch this session's model; when off, those calls are refused. Switching its own model is always allowed, and messaging is not gated by this switch.",
       'model.failed': 'Could not save the switch: {message}',
     };
 
@@ -128,7 +128,7 @@ window.__ModuleLoader__.load({
             checked: enabled,
             disabled: busy || Boolean(locked),
             label: label,
-            onChange: change,
+            onChange: (next) => change(Boolean(next)),
           })
         : h('input', {
             type: 'checkbox',

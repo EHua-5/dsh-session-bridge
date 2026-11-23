@@ -90,7 +90,8 @@ function renderList(args, value) {
   const lines = [`活会话 ${value.sessions.length} 个：`];
   for (const session of value.sessions) {
     const suffix = session.pending ? `  （上一轮实际：${routeText(session.lastUsed)}，切换待生效）` : '';
-    lines.push(`· ${session.id}  ${session.busy ? 'busy' : 'idle'}  ${routeText(session)}${suffix}`);
+    const consent = session.consent ? '  · 可被换模型' : '  · 不允许被换模型';
+    lines.push(`· ${session.id}  ${session.busy ? 'busy' : 'idle'}  ${routeText(session)}${suffix}${consent}`);
   }
   return [{ type: 'text', text: lines.join('\n') }];
 }
@@ -236,7 +237,12 @@ export function createTools(ctx, options = {}) {
     output: { schema: { type: 'object', additionalProperties: true }, render: renderList },
     timeoutMs: 10000,
     async execute() {
-      return { sessions: ctx.agents.list().map(sessionView) };
+      return {
+        sessions: ctx.agents.list().map((agent) => ({
+          ...sessionView(agent),
+          consent: features.isEnabled(String(agent.id)),
+        })),
+      };
     },
   };
 
@@ -329,7 +335,7 @@ export function createTools(ctx, options = {}) {
     description:
       '把一条文字消息投进另一个活会话（作为用户消息入队，对方忙就排到下一轮）。' +
       '用于跨会话沟通：请对方配合换模型、通知对方模型已切换、或让两个会话直接对话。' +
-      '消息以用户消息身份进入对方历史，会让对方开一轮处理。需目标会话已开启「允许其他会话更换本会话的模型」。',
+      '消息以用户消息身份进入对方历史，会让对方开一轮处理。发消息不受「允许其他会话更换本会话的模型」开关限制。',
     parameters: {
       type: 'object',
       properties: {
@@ -347,7 +353,6 @@ export function createTools(ctx, options = {}) {
       const text = String((args && args.text) || '').trim();
       if (!sessionId || !text) throw new Error('sessionId / text 都是必填');
       const agent = requireAgent(sessionId);
-      requireTargetConsent(sessionId, '给它发消息');
       const source = String((args && args.source) || '').trim().slice(0, 40);
       const sent = sendMessage(agent, text, source);
       return { ok: true, sessionId, id: sent.id, queued: sent.queued };

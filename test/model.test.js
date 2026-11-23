@@ -104,6 +104,7 @@ test('list：当前模型 + 上一次实际使用的模型', async () => {
     model: 'deepseek-flash',
     reasoningEffort: null,
     pending: false,
+    consent: true,
     lastUsed: { provider: 'deepseek-account', model: 'deepseek-flash' },
   });
   assert.equal(value.sessions[1].provider, null);
@@ -343,7 +344,7 @@ test('apply：注册四个工具，disposer 后注销', () => {
 
 // ---- 按会话开关（B） -----------------------------------------------------
 
-test('开关：未开启的会话不能换模型、不能发消息', async () => {
+test('开关：目标未同意时不能换模型；发消息不受开关限制', async () => {
   const target = makeAgent('session-b', { provider: 'deepseek-account', model: 'deepseek-flash' });
   const tools = createTools(makeCtx([target]));
   try {
@@ -352,13 +353,12 @@ test('开关：未开启的会话不能换模型、不能发消息', async () =>
       () => tools.set.execute({ sessionId: 'session-b', provider: 'bailian-tpp', model: 'qwen4-max' }),
       /未允许别的会话/,
     );
-    await assert.rejects(
-      () => tools.message.execute({ sessionId: 'session-b', text: 'hi' }),
-      /未允许别的会话/,
-    );
-    // 目标会话没被改动
+    // 发消息是独立能力，不该被这个开关拦住
+    const sent = await tools.message.execute({ sessionId: 'session-b', text: 'hi' });
+    assert.equal(sent.ok, true);
+    assert.equal(target.messages.length, 1);
+    // 模型没被改动
     assert.deepEqual(target.model.current(), { provider: 'deepseek-account', model: 'deepseek-flash' });
-    assert.equal(target.messages.length, 0);
   } finally {
     setEnabled(ENABLED);
   }
@@ -397,6 +397,18 @@ test('开关：自己改自己不需要目标同意', async () => {
     const value = await tools.set.execute({ sessionId: 'session-a', provider: 'bailian-tpp', model: 'qwen4-max' });
     assert.equal(value.ok, true);
     assert.equal(value.notified, false, '自己是目标时不发通知');
+  } finally {
+    setEnabled(ENABLED);
+  }
+});
+
+test('list：consent 标出能否被别的会话换模型', async () => {
+  const tools = createTools(makeCtx([makeAgent('session-b', null)]));
+  try {
+    setEnabled([]);
+    assert.equal((await tools.list.execute({})).sessions[0].consent, false);
+    setEnabled(['session-b']);
+    assert.equal((await tools.list.execute({})).sessions[0].consent, true);
   } finally {
     setEnabled(ENABLED);
   }
