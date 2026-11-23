@@ -308,5 +308,5 @@ export function apply(ctx, config) {
 }
 
 export const name = 'media';
-export const inject = ['tools'];
+export const inject = ['tools', 'credentials', 'attachments'];
 export { DEFAULT_HOST, DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, DEFAULT_AUDIO_MODEL, DEFAULT_VOICE };
