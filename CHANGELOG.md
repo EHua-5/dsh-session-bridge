@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.4 — 2026-11-23
+
+- 目录渲染补 `[media]` 标记（之前 kind 只在结构化返回值里，模型在文本上看不到）。
+
 ## 0.4.3 — 2026-11-23
 
 - 生成类模型保护：`session_model_set` 默认拒绝 id/name 命中 image/video/audio/tts/asr/… 的模型，

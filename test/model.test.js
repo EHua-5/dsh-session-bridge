@@ -444,10 +444,14 @@ test('catalog：标出 chat / media 类型', async () => {
       resolveModelInfo: async (_p, id) => ({ provider: 'media-provider', id, name: id }),
     },
   });
-  const value = await createTools(ctx).catalog.execute({});
+  const tools = createTools(ctx);
+  const value = await tools.catalog.execute({});
   const byId = Object.fromEntries(value.providers[0].models.map((m) => [m.id, m.kind]));
   assert.equal(byId['deepseek-v4-pro'], 'chat');
   assert.equal(byId['wan2.7-image'], 'media');
+  const text = tools.catalog.output.render({}, value)[0].text;
+  assert.match(text, /\[media\] wan2\.7-image/);
+  assert.doesNotMatch(text, /\[media\] deepseek-v4-pro/);
 });
 
 test('set：生成类模型默认拒绝，allowNonChat:true 放行', async () => {

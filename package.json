@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-session-bridge",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "DSH session bridge: local HTTP inbox for live sessions, cross-session model switching, and a per-session target-consent switch in the composer model menu.",
   "type": "module",
   "license": "MIT",

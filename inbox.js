@@ -32,7 +32,7 @@ import { FeatureStore, defaultFeaturesFile } from './shared.js';
 export const name = 'inbox-bridge';
 
 /** 插件版本：/health.version 会报出来，维护域据此核对部署的是哪版。 */
-export const version = '0.4.3';
+export const version = '0.4.4';
 
 const MAX_BODY = 64 * 1024;
 const DEFAULT_PORT = 39881;

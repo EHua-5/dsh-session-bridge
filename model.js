@@ -121,7 +121,8 @@ function renderCatalog(args, value) {
       if (model.defaultEffort) bits.push(`default=${model.defaultEffort}`);
       if (model.inputModalities && model.inputModalities.length) bits.push(`in=${model.inputModalities.join('+')}`);
       if (model.error) bits.push(`err=${model.error}`);
-      lines.push(`  - ${model.id}${bits.length ? '  ' + bits.join('  ') : ''}`);
+      const kind = model.kind === 'media' ? '[media] ' : '';
+      lines.push(`  - ${kind}${model.id}${bits.length ? '  ' + bits.join('  ') : ''}`);
     }
   }
   return [{ type: 'text', text: lines.join('\n') || '（没有可调模型）' }];
