@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.3 — 2026-11-23
+
+- 生成类模型保护：`session_model_set` 默认拒绝 id/name 命中 image/video/audio/tts/asr/… 的模型，
+  确需让会话产出这类内容时显式传 `allowNonChat: true`。
+- `session_model_catalog` 每条模型带 `kind: chat|media`；`session_model_set` 返回 `kind`。
+
 ## 0.4.2 — 2026-11-23
 
 - 修 `session_model_catalog` 在模型缺少 `reasoning`/`context` 元数据时整体失败：

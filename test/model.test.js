@@ -432,3 +432,43 @@ test('catalog：模型缺少 reasoning/context 元数据时仍可序列化（不
   // 序列化往返（工具输出就是走这条路径）
   assert.deepEqual(JSON.parse(JSON.stringify(value)), value);
 });
+
+test('catalog：标出 chat / media 类型', async () => {
+  const ctx = makeCtx([], {
+    llm: {
+      listProviders: () => [{ id: 'media-provider', name: 'Media' }],
+      listModels: async () => [
+        { id: 'deepseek-v4-pro', name: 'Pro' },
+        { id: 'wan2.7-image', name: 'Image' },
+      ],
+      resolveModelInfo: async (_p, id) => ({ provider: 'media-provider', id, name: id }),
+    },
+  });
+  const value = await createTools(ctx).catalog.execute({});
+  const byId = Object.fromEntries(value.providers[0].models.map((m) => [m.id, m.kind]));
+  assert.equal(byId['deepseek-v4-pro'], 'chat');
+  assert.equal(byId['wan2.7-image'], 'media');
+});
+
+test('set：生成类模型默认拒绝，allowNonChat:true 放行', async () => {
+  const target = makeAgent('session-b', { provider: 'deepseek-account', model: 'deepseek-flash' });
+  const ctx = makeCtx([target], {
+    llm: { resolveCallConfig: async (selection) => selection },
+  });
+  const tools = createTools(ctx);
+  await assert.rejects(
+    () => tools.set.execute({ sessionId: 'session-b', provider: 'bailian-tpp', model: 'wan2.7-image' }),
+    /生成类模型/,
+  );
+  assert.deepEqual(target.model.current(), { provider: 'deepseek-account', model: 'deepseek-flash' });
+  const value = await tools.set.execute({
+    sessionId: 'session-b',
+    provider: 'bailian-tpp',
+    model: 'wan2.7-image',
+    allowNonChat: true,
+    notify: false,
+  });
+  assert.equal(value.ok, true);
+  assert.equal(value.kind, 'media');
+  assert.deepEqual(target.model.current(), { provider: 'bailian-tpp', model: 'wan2.7-image' });
+});

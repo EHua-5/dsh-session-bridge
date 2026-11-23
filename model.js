@@ -23,6 +23,16 @@ export const name = 'session-model';
 /** tools：注册工具；agents：找目标会话与调用方；llm：校验并读取模型目录。 */
 export const inject = ['agents', 'tools', 'llm'];
 
+/** 生成类模型（图片/视频/音频/…）的 id 特征：默认拦截，allowNonChat:true 才放行。 */
+const MEDIA_MODEL_PATTERN = /(image|video|audio|tts|asr|speech|transcri|embedding|rerank|moderation|ocr)/i;
+
+/** 按 id/name 粗分 chat 与 media；只用于提示与默认拦截，不做能力判定。 */
+export function modelKind(id, name) {
+  return MEDIA_MODEL_PATTERN.test(String(id || '')) || MEDIA_MODEL_PATTERN.test(String(name || ''))
+    ? 'media'
+    : 'chat';
+}
+
 /** 模型目录的单次查询上限，避免某个 provider 卡住整个工具调用。 */
 const PROVIDER_TIMEOUT_MS = 4000;
 const MODEL_INFO_TIMEOUT_MS = 4000;
@@ -163,7 +173,7 @@ export function createTools(ctx, options = {}) {
         `${provider}/${model.id} 元数据`,
       );
       // 只写入有值的字段：工具输出要求 lossless JSON，显式 undefined 会让整个调用失败
-      const entry = { ...base };
+      const entry = { ...base, kind: modelKind(model.id, model.name) };
       const contextWindow = info && info.context ? info.context.contextWindow : undefined;
       if (contextWindow !== undefined) entry.contextWindow = contextWindow;
       entry.reasoningEfforts = info && info.reasoning ? info.reasoning.efforts.map((effort) => effort.id) : [];
@@ -277,7 +287,9 @@ export function createTools(ctx, options = {}) {
     description:
       '给指定会话换模型。只对活会话有效；provider/model 必须存在且可用，否则报错且不改动。' +
       '切换写入该会话的选择投影，下一次模型请求开始生效。默认会往对方会话投一条说明（notify:false 可关），' +
-      '需目标会话已开启「允许其他会话更换本会话的模型」（在对方的模型菜单里打开）；自己改自己不受此限制。调用方不是目标会话时才通知。不确定 id 或可用模型时，先调 session_model_list / session_model_catalog。',
+      '需目标会话已开启「允许其他会话更换本会话的模型」（在对方的模型菜单里打开）；自己改自己不受此限制。' +
+      '图片/视频/音频等生成类模型默认拒绝，确需让该会话产出这类内容时传 allowNonChat:true。' +
+      '调用方不是目标会话时才通知。不确定 id 或可用模型时，先调 session_model_list / session_model_catalog。',
     parameters: {
       type: 'object',
       properties: {
@@ -286,6 +298,11 @@ export function createTools(ctx, options = {}) {
         model: { type: 'string', description: '该 provider 下的 model id' },
         reasoningEffort: { type: 'string', description: '可选；该模型支持的推理强度 id，不传则用适配器默认' },
         notify: { type: 'boolean', description: '切换后是否通知对方会话，默认 true（仅跨会话时）' },
+        allowNonChat: {
+          type: 'boolean',
+          description:
+            '默认 false：图片/视频/音频等生成类模型会被拒绝。确实要让该会话产出这类内容时传 true。',
+        },
         note: { type: 'string', description: '可选；附在通知里的说明' },
       },
       required: ['sessionId', 'provider', 'model'],
@@ -302,6 +319,13 @@ export function createTools(ctx, options = {}) {
       const me = requireTargetConsent(sessionId, '更换它的模型');
       if (!agent.model || typeof agent.model.select !== 'function') {
         throw new Error(`会话 ${sessionId} 没有模型选择接口，无法切换`);
+      }
+      const kind = modelKind(model, '');
+      if (kind === 'media' && args.allowNonChat !== true) {
+        throw new Error(
+          `模型 ${provider}/${model} 看起来是生成类模型（图片/视频/音频/…），选成会话模型可能让该会话的回合失败或行为异常；` +
+            '确认要让这个会话产出这类内容，请传 allowNonChat: true。',
+        );
       }
       const selection = { provider, model };
       if (args.reasoningEffort !== undefined) selection.reasoningEffort = String(args.reasoningEffort);
@@ -328,7 +352,7 @@ export function createTools(ctx, options = {}) {
         );
         notified = true;
       }
-      return { ok: true, sessionId, previous, selected, changed, appliedAt: 'next-step', notified };
+      return { ok: true, sessionId, previous, selected, kind, changed, appliedAt: 'next-step', notified };
     },
   };
 

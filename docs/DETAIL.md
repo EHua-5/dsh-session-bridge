@@ -34,7 +34,7 @@ GET/POST /features/model-tools   按会话的换模型开关（本机、免 toke
 |---|---|
 | `session_model_list` | 活会话、忙碌、当前模型、上一次请求实际用的模型（含"切换待生效"）；并标出每个会话"能否被换模型" |
 | `session_model_catalog` | 可调模型：provider / model / 上下文窗口 / 推理强度 / 输入模态 |
-| `session_model_set` | 给指定会话换模型，下一轮生效；跨会话默认通知对方 |
+| `session_model_set` | 给指定会话换模型，下一轮生效；跨会话默认通知对方；生成类模型默认拒绝 |
 | `session_message_send` | 给另一个活会话发一条用户消息（对方忙就排下一轮） |
 
 ### 按会话开关
@@ -43,6 +43,9 @@ GET/POST /features/model-tools   按会话的换模型开关（本机、免 toke
 - 语义是**目标会话同意（只针对换模型）**：`session_model_set` 要求**目标会话**已开启
   「允许其他会话更换本会话的模型」；自己改自己不受限制。
 - `session_message_send` **不受**这个开关限制（跨会话沟通是独立能力）。
+- **生成类模型保护**：id/name 命中 `image|video|audio|tts|asr|speech|embedding|rerank|moderation|ocr` 的模型
+  默认拒绝；确实要让某个会话产出图片/视频/音频时，`session_model_set` 传 `allowNonChat: true`。
+  `session_model_catalog` 的每条模型都带 `kind: chat|media`。
 - **只读**（`session_model_list`、`session_model_catalog`）不受影响。
 - 开关入口：输入框模型菜单里的一行开关（客户端半），或直接 `POST /features/model-tools`。
 
