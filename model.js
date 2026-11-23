@@ -324,7 +324,7 @@ export function createTools(ctx, options = {}) {
       const kind = modelKind(model, '');
       if (kind === 'media' && args.allowNonChat !== true) {
         throw new Error(
-          `模型 ${provider}/${model} 看起来是生成类模型（图片/视频/音频/…），选成会话模型可能让该会话的回合失败或行为异常；` +
+          `模型 ${provider}/${model} 看起来是生成类模型（图片/视频/音频/…），选成会话模型通常会让该会话的回合失败（这类模型一般只接受它自己的生成 API，agent 对话格式会被拒绝）；` +
             '确认要让这个会话产出这类内容，请传 allowNonChat: true。',
         );
       }

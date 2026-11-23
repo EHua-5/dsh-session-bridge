@@ -45,6 +45,9 @@ GET/POST /features/model-tools   按会话的换模型开关（本机、免 toke
 - `session_message_send` **不受**这个开关限制（跨会话沟通是独立能力）。
 - **生成类模型保护**：id/name 命中 `image|video|audio|tts|asr|speech|embedding|rerank|moderation|ocr` 的模型
   默认拒绝；确实要让某个会话产出图片/视频/音频时，`session_model_set` 传 `allowNonChat: true`。
+  **注意**：这类模型的 provider 通常只接受它自己的生成 API（例如 user-only 消息、list 形式的 content），
+  agent 的完整对话格式会被 400 拒绝——实测 `bailian-tpp/wan2.7-image` 即如此。切过去只会让该会话的回合失败；
+  要真正生图，应另加一个调用图像 API 的工具，而不是换会话模型。
   `session_model_catalog` 的每条模型都带 `kind: chat|media`。
 - **只读**（`session_model_list`、`session_model_catalog`）不受影响。
 - 开关入口：输入框模型菜单里的一行开关（客户端半），或直接 `POST /features/model-tools`。
