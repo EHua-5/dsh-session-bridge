@@ -36,6 +36,9 @@ GET/POST /features/model-tools   按会话的换模型开关（本机、免 toke
 | `session_model_catalog` | 可调模型：provider / model / 上下文窗口 / 推理强度 / 输入模态 |
 | `session_model_set` | 给指定会话换模型，下一轮生效；跨会话默认通知对方；生成类模型默认拒绝 |
 | `session_message_send` | 给另一个活会话发一条用户消息（对方忙就排下一轮） |
+| `image_generate` | 调用生图接口生成图片，保存到 `~/.dsh/generated/`，返回文件路径与图片内容块 |
+| `video_generate` | 提交异步视频任务并轮询，下载 mp4 到 `~/.dsh/generated/` |
+| `audio_generate` | 语音合成（默认 `qwen-audio-3.0-tts-plus` / `longanlingxin`），下载 mp3 |
 
 ### 按会话开关
 
@@ -51,6 +54,19 @@ GET/POST /features/model-tools   按会话的换模型开关（本机、免 toke
   `session_model_catalog` 的每条模型都带 `kind: chat|media`。
 - **只读**（`session_model_list`、`session_model_catalog`）不受影响。
 - 开关入口：输入框模型菜单里的一行开关（客户端半），或直接 `POST /features/model-tools`。
+
+## 生成类工具（media 行）
+
+与换模型无关：生图/视频/TTS 的 API 形状和 agent 对话不同，按各自端点调用，结果落到
+`~/.dsh/generated/`（可用 config.outputDir 改）。端点：
+
+- 图：`POST /compatible-mode/v1/chat/completions`（user-only、content 数组）→ `output…content[].image`
+- 视频：`POST /api/v1/services/aigc/video-generation/video-synthesis`（`X-DashScope-Async: enable`）
+  → `output.task_id` → 轮询 `GET /api/v1/tasks/{id}` → `output.video_url`
+- 音频：`POST /api/v1/services/audio/tts/SpeechSynthesizer` → `output.audio.url`
+
+key 解析顺序：`config.apiKey` → 环境变量 `BAILIAN_TPP_API_KEY` → `ctx.credentials.resolve`。
+图片经附件服务转成 image block（GUI 直接显示）；附件不可用时退回 markdown 链接。
 
 ## 安全说明
 

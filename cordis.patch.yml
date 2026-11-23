@@ -3,3 +3,5 @@
       name: '@local/dsh-session-bridge'
     - id: inbox-bridge
       name: '@local/dsh-session-bridge/inbox'
+    - id: media
+      name: '@local/dsh-session-bridge/media'

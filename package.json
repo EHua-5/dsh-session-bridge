@@ -1,7 +1,7 @@
 {
   "name": "@local/dsh-session-bridge",
-  "version": "0.4.5",
-  "description": "DSH session bridge: local HTTP inbox for live sessions, cross-session model switching, and a per-session target-consent switch in the composer model menu.",
+  "version": "0.5.0",
+  "description": "DSH session bridge: local HTTP inbox, cross-session model switching with target consent, and image/video/audio generation tools.",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -17,7 +17,8 @@
     "./shared": "./shared.js",
     "./client": "./client.js",
     "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg"
+    "./icon": "./icon.svg",
+    "./media": "./media.js"
   },
   "files": [
     "inbox.js",

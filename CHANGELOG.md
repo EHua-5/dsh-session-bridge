@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0 — 2026-11-23
+
+- 新增 `media` 行与三个生成工具：`image_generate`（生图，返回图片内容块）、
+  `video_generate`（异步任务 + 轮询，下载 mp4）、`audio_generate`（TTS，下载 mp3）。
+- 产物默认存 `~/.dsh/generated/`；key 依次取 config.apiKey / 环境变量 / `ctx.credentials`。
+- 新增 `test/media.test.js`（fetch 打桩，7 条）。
+
 ## 0.4.5 — 2026-11-23
 
 - 生成类模型拒绝文案更明确（说明这类模型通常只接受自己的生成 API，agent 回合会 400）；
