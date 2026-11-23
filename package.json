@@ -1,0 +1,62 @@
+{
+  "name": "@local/dsh-session-bridge",
+  "version": "0.3.0",
+  "description": "DSH session bridge: local HTTP inbox for live sessions, cross-session model switching, and a per-session switch in the composer model menu.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node test/inbox.test.js && node test/model.test.js"
+  },
+  "exports": {
+    ".": "./inbox.js",
+    "./inbox": "./inbox.js",
+    "./model": "./model.js",
+    "./shared": "./shared.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "inbox.js",
+    "model.js",
+    "shared.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "docs",
+    "icon.svg",
+    "README.md",
+    "README.zh.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "session",
+    "bridge",
+    "inbox",
+    "model"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-model-selection",
+        "@deepseek-ai/dsh-client-ui-primitives",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  }
+}

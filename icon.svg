@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36" role="img" aria-label="Inbox bridge">
+  <title>Inbox bridge</title>
+  <rect x="16.4" y="4.6" width="3.2" height="10.4" rx="1.6" fill="#3f7fbf"/>
+  <path d="M11.9 13.4h12.2a.7.7 0 0 1 .5 1.2l-6.1 6.4a1 1 0 0 1-1.5 0l-6.1-6.4a.7.7 0 0 1 .5-1.2Z" fill="#3f7fbf"/>
+  <path d="M7 21.2h6.4q.5 2.1 2.7 2.1h3.8q2.2 0 2.7-2.1H29v4.9A4.9 4.9 0 0 1 24.1 31H11.9A4.9 4.9 0 0 1 7 26.1Z" fill="#8fb0d6"/>
+</svg>

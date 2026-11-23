@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Session bridge",
+    "description": "Local HTTP inbox for live sessions (deduplicated delivery with queryable results) plus cross-session model switching and messaging tools, gated by a per-session switch in the composer model menu.",
+    "detail": "docs/DETAIL.md"
+  }
+}
