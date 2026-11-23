@@ -413,3 +413,22 @@ test('list：consent 标出能否被别的会话换模型', async () => {
     setEnabled(ENABLED);
   }
 });
+
+test('catalog：模型缺少 reasoning/context 元数据时仍可序列化（不能出现 undefined 字段）', async () => {
+  const ctx = makeCtx([], {
+    llm: {
+      listProviders: () => [{ id: 'plain', name: 'Plain' }],
+      listModels: async () => [{ id: 'plain-model', name: 'Plain Model' }],
+      resolveModelInfo: async () => ({ provider: 'plain', id: 'plain-model', name: 'Plain Model' }),
+    },
+  });
+  const value = await createTools(ctx).catalog.execute({});
+  const model = value.providers[0].models[0];
+  assert.equal(model.id, 'plain-model');
+  assert.deepEqual(model.reasoningEfforts, []);
+  assert.deepEqual(model.inputModalities, []);
+  assert.equal('defaultEffort' in model, false, '缺省 effort 不该以 undefined 出现');
+  assert.equal('contextWindow' in model, false, '缺省窗口不该以 undefined 出现');
+  // 序列化往返（工具输出就是走这条路径）
+  assert.deepEqual(JSON.parse(JSON.stringify(value)), value);
+});

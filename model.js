@@ -162,13 +162,15 @@ export function createTools(ctx, options = {}) {
         MODEL_INFO_TIMEOUT_MS,
         `${provider}/${model.id} 元数据`,
       );
-      return {
-        ...base,
-        contextWindow: info && info.context && info.context.contextWindow,
-        reasoningEfforts: info && info.reasoning ? info.reasoning.efforts.map((effort) => effort.id) : [],
-        defaultEffort: info && info.reasoning ? info.reasoning.defaultEffort : undefined,
-        inputModalities: (info && info.inputModalities) || [],
-      };
+      // 只写入有值的字段：工具输出要求 lossless JSON，显式 undefined 会让整个调用失败
+      const entry = { ...base };
+      const contextWindow = info && info.context ? info.context.contextWindow : undefined;
+      if (contextWindow !== undefined) entry.contextWindow = contextWindow;
+      entry.reasoningEfforts = info && info.reasoning ? info.reasoning.efforts.map((effort) => effort.id) : [];
+      const defaultEffort = info && info.reasoning ? info.reasoning.defaultEffort : undefined;
+      if (defaultEffort !== undefined) entry.defaultEffort = defaultEffort;
+      entry.inputModalities = (info && info.inputModalities) || [];
+      return entry;
     } catch (error) {
       return { ...base, error: String((error && error.message) || error) };
     }

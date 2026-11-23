@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.2 — 2026-11-23
+
+- 修 `session_model_catalog` 在模型缺少 `reasoning`/`context` 元数据时整体失败：
+  之前把 `defaultEffort: undefined` 写进返回值，工具输出要求 lossless JSON，导致整个调用报
+  "value is not lossless JSON"。现在只写有值的字段。
+
 ## 0.4.1 — 2026-11-23
 
 - 一致性修正：同意开关只约束**换模型**；`session_message_send` 不再要求目标开启开关
