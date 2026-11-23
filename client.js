@@ -48,6 +48,32 @@ window.__ModuleLoader__.load({
       return BRIDGE + '/features/model-tools?sessionId=' + encodeURIComponent(sessionId);
     }
 
+    // 模块级缓存 + 单飞：菜单在会话忙碌时会频繁重挂载，重挂载时直接用上次的状态，
+    // 避免先 return null 再出现造成的闪烁；并发挂载也只发一次请求。
+    const featureCache = new Map();
+    const featureInflight = new Map();
+
+    function cachedFeature(sessionId) {
+      return featureCache.has(sessionId) ? featureCache.get(sessionId) : null;
+    }
+
+    function loadFeature(sessionId) {
+      if (featureInflight.has(sessionId)) return featureInflight.get(sessionId);
+      const promise = fetch(endpoint(sessionId), { method: 'GET' })
+        .then((response) => response.json())
+        .then((value) => {
+          const on = Boolean(value && value.enabled);
+          featureCache.set(sessionId, on);
+          return on;
+        })
+        .catch(() => false)
+        .finally(() => {
+          featureInflight.delete(sessionId);
+        });
+      featureInflight.set(sessionId, promise);
+      return promise;
+    }
+
     // 与 agent-team 的 TeamModeToggle 一致的排布：左侧标签 + 说明图标，右侧胶囊开关
     const rowStyle = {
       display: 'flex',
@@ -70,7 +96,7 @@ window.__ModuleLoader__.load({
 
     function ModelToolsToggle(props) {
       const { t, sessionId, locked } = props || {};
-      const [enabled, setEnabled] = React.useState(null);
+      const [enabled, setEnabled] = React.useState(() => cachedFeature(sessionId));
       const [busy, setBusy] = React.useState(false);
       const [failure, setFailure] = React.useState('');
 
@@ -84,22 +110,21 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         if (!sessionId) return undefined;
+        if (featureCache.has(sessionId)) {
+          setEnabled(featureCache.get(sessionId));
+          return undefined;
+        }
         let alive = true;
-        fetch(endpoint(sessionId), { method: 'GET' })
-          .then((response) => response.json())
-          .then((value) => {
-            if (alive) setEnabled(Boolean(value && value.enabled));
-          })
-          .catch(() => {
-            if (alive) setEnabled(false);
-          });
+        loadFeature(sessionId).then((on) => {
+          if (alive) setEnabled(on);
+        });
         return () => {
           alive = false;
         };
       }, [sessionId]);
 
       if (addressedChild || listedChild) return null;
-      if (enabled === null) return null;
+      // 加载中不再整行消失：行始终渲染，开关暂时禁用占位，避免菜单出现/消失的闪烁
 
       const change = (next) => {
         if (busy) return;
@@ -112,8 +137,11 @@ window.__ModuleLoader__.load({
         })
           .then((response) => response.json())
           .then((value) => {
-            if (value && value.ok) setEnabled(Boolean(value.enabled));
-            else setFailure(String((value && value.error) || 'unknown error'));
+            if (value && value.ok) {
+              const on = Boolean(value.enabled);
+              featureCache.set(sessionId, on);
+              setEnabled(on);
+            } else setFailure(String((value && value.error) || 'unknown error'));
           })
           .catch((error) => setFailure(String(error)))
           .finally(() => setBusy(false));
@@ -125,15 +153,15 @@ window.__ModuleLoader__.load({
 
       const control = Switch
         ? h(Switch, {
-            checked: enabled,
-            disabled: busy || Boolean(locked),
+            checked: Boolean(enabled),
+            disabled: enabled === null || busy || Boolean(locked),
             label: label,
             onChange: (next) => change(Boolean(next)),
           })
         : h('input', {
             type: 'checkbox',
-            checked: enabled,
-            disabled: busy || Boolean(locked),
+            checked: Boolean(enabled),
+            disabled: enabled === null || busy || Boolean(locked),
             'aria-label': label,
             onChange: (event) => change(Boolean(event.target.checked)),
             style: { width: '18px', height: '18px', cursor: busy ? 'default' : 'pointer' },
