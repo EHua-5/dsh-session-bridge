@@ -5,7 +5,7 @@ One package, two plugin rows, plus a composer switch:
 | Entry | Row | What it does |
 |---|---|---|
 | `./inbox` | `inbox-bridge` | Local HTTP inbox: deliver text into a live session, dedupe by `dedupeKey`, query delivery results |
-| `./model` | `session-model` | Cross-session tools: list sessions/models, switch another session's model, message another session |
+| `./model` (also `.)` | `session-model` | Cross-session tools: list sessions/models, switch another session's model, message another session; **the composer switch rides this row** |
 
 A small client half adds **“Enable cross-session model changes”** to the composer's model menu,
 per session, right below “Enable agent teamwork”. The two rows can be enabled independently.

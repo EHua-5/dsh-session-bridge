@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-session-bridge",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "DSH session bridge: local HTTP inbox for live sessions, cross-session model switching, and a per-session switch in the composer model menu.",
   "type": "module",
   "license": "MIT",
@@ -11,7 +11,7 @@
     "test": "node test/inbox.test.js && node test/model.test.js"
   },
   "exports": {
-    ".": "./inbox.js",
+    ".": "./model.js",
     "./inbox": "./inbox.js",
     "./model": "./model.js",
     "./shared": "./shared.js",
@@ -54,7 +54,6 @@
       "inject": [
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-model-selection",
-        "@deepseek-ai/dsh-client-ui-primitives",
         "@deepseek-ai/dsh-client-locale"
       ]
     }

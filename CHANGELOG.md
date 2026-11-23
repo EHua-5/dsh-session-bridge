@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1 — 2026-11-23
+
+- 修复客户端半不加载：`dsh.client` 只会从**包根行**被发现。现在 patch 的 `session-model` 行直接指向包根
+  （`@local/dsh-session-bridge`，导出 `./model.js`），收件箱仍是子路径行 `.../inbox`。
+- `dsh.client.inject` 收窄为 conversation / model-selection / locale 三个真实包行。
+
 ## 0.3.0 — 2026-11-23
 
 首个合包版本：把 `dsh-inbox-bridge`（0.2.1）与 `dsh-session-model`（0.2.0）合成一个包、两条插件行。
