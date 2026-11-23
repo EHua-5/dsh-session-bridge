@@ -14,7 +14,7 @@ import { apply, createTools } from '../model.js';
 // 按会话开关的状态文件：默认给测试里的调用方开着
 const FEATURES = path.join(os.tmpdir(), `session-bridge-features-${process.pid}-${Date.now()}.json`);
 process.env.SESSION_BRIDGE_FEATURES = FEATURES;
-const ENABLED = ['session-caller', 'session-a'];
+const ENABLED = ['session-b', 'session-a'];
 function setEnabled(ids) {
   fs.writeFileSync(FEATURES, JSON.stringify({ enabled: ids }), 'utf8');
 }
@@ -350,11 +350,11 @@ test('开关：未开启的会话不能换模型、不能发消息', async () =>
     setEnabled([]);
     await assert.rejects(
       () => tools.set.execute({ sessionId: 'session-b', provider: 'bailian-tpp', model: 'qwen4-max' }),
-      /未开启跨会话换模型/,
+      /未允许别的会话/,
     );
     await assert.rejects(
       () => tools.message.execute({ sessionId: 'session-b', text: 'hi' }),
-      /未开启跨会话换模型/,
+      /未允许别的会话/,
     );
     // 目标会话没被改动
     assert.deepEqual(target.model.current(), { provider: 'deepseek-account', model: 'deepseek-flash' });
@@ -381,9 +381,22 @@ test('开关：开启后写操作放行', async () => {
   const target = makeAgent('session-b', { provider: 'deepseek-account', model: 'deepseek-flash' });
   const tools = createTools(makeCtx([target], { caller: { id: 'session-a' } }));
   try {
-    setEnabled(['session-a']);
+    setEnabled(['session-b']);
     const value = await tools.set.execute({ sessionId: 'session-b', provider: 'bailian-tpp', model: 'qwen4-max' });
     assert.equal(value.ok, true);
+  } finally {
+    setEnabled(ENABLED);
+  }
+});
+
+test('开关：自己改自己不需要目标同意', async () => {
+  const self = makeAgent('session-a', { provider: 'deepseek-account', model: 'deepseek-flash' });
+  const tools = createTools(makeCtx([self], { caller: { id: 'session-a' } }));
+  try {
+    setEnabled([]);
+    const value = await tools.set.execute({ sessionId: 'session-a', provider: 'bailian-tpp', model: 'qwen4-max' });
+    assert.equal(value.ok, true);
+    assert.equal(value.notified, false, '自己是目标时不发通知');
   } finally {
     setEnabled(ENABLED);
   }

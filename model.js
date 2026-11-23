@@ -212,13 +212,16 @@ export function createTools(ctx, options = {}) {
     return deliver(agent, text, source);
   }
 
-  /** B：按会话开关。未开启的会话不能发起写操作（只读查询不受影响）。 */
-  function requireEnabled(action) {
+  /**
+   * 开关按"被操作方"生效：目标会话同意，别人才动得了它。
+   * 自己操作自己不需要开关。
+   */
+  function requireTargetConsent(sessionId, action) {
     const me = callerId();
-    if (!me) throw new Error(`无法确定调用方会话，不能${action}：工具必须在会话内调用`);
-    if (!features.isEnabled(me)) {
+    if (me && me === sessionId) return me;
+    if (!features.isEnabled(sessionId)) {
       throw new Error(
-        `本会话（${me}）未开启跨会话换模型：请在输入框的模型菜单里打开「启用跨会话换模型」`,
+        `目标会话（${sessionId}）未允许别的会话${action}：请在对方的输入框模型菜单里打开「允许其他会话更换本会话的模型」`,
       );
     }
     return me;
@@ -266,7 +269,7 @@ export function createTools(ctx, options = {}) {
     description:
       '给指定会话换模型。只对活会话有效；provider/model 必须存在且可用，否则报错且不改动。' +
       '切换写入该会话的选择投影，下一次模型请求开始生效。默认会往对方会话投一条说明（notify:false 可关），' +
-      '需本会话已开启「启用跨会话换模型」（输入框的模型菜单）。调用方不是目标会话时才通知。不确定 id 或可用模型时，先调 session_model_list / session_model_catalog。',
+      '需目标会话已开启「允许其他会话更换本会话的模型」（在对方的模型菜单里打开）；自己改自己不受此限制。调用方不是目标会话时才通知。不确定 id 或可用模型时，先调 session_model_list / session_model_catalog。',
     parameters: {
       type: 'object',
       properties: {
@@ -288,7 +291,7 @@ export function createTools(ctx, options = {}) {
       const model = String((args && args.model) || '');
       if (!sessionId || !provider || !model) throw new Error('sessionId / provider / model 都是必填');
       const agent = requireAgent(sessionId);
-      const me = requireEnabled('给其它会话换模型');
+      const me = requireTargetConsent(sessionId, '更换它的模型');
       if (!agent.model || typeof agent.model.select !== 'function') {
         throw new Error(`会话 ${sessionId} 没有模型选择接口，无法切换`);
       }
@@ -326,7 +329,7 @@ export function createTools(ctx, options = {}) {
     description:
       '把一条文字消息投进另一个活会话（作为用户消息入队，对方忙就排到下一轮）。' +
       '用于跨会话沟通：请对方配合换模型、通知对方模型已切换、或让两个会话直接对话。' +
-      '消息以用户消息身份进入对方历史，会让对方开一轮处理。需本会话已开启「启用跨会话换模型」。',
+      '消息以用户消息身份进入对方历史，会让对方开一轮处理。需目标会话已开启「允许其他会话更换本会话的模型」。',
     parameters: {
       type: 'object',
       properties: {
@@ -344,7 +347,7 @@ export function createTools(ctx, options = {}) {
       const text = String((args && args.text) || '').trim();
       if (!sessionId || !text) throw new Error('sessionId / text 都是必填');
       const agent = requireAgent(sessionId);
-      requireEnabled('给其它会话发消息');
+      requireTargetConsent(sessionId, '给它发消息');
       const source = String((args && args.source) || '').trim().slice(0, 40);
       const sent = sendMessage(agent, text, source);
       return { ok: true, sessionId, id: sent.id, queued: sent.queued };

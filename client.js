@@ -27,17 +27,17 @@ window.__ModuleLoader__.load({
     const InfoIcon = primitives && primitives.IconInfoOutlineRegular;
 
     const zh = {
-      'model.label': '允许本会话换别人的模型',
-      'model.infoLabel': '关于跨会话换模型',
+      'model.label': '允许其他会话更换本会话的模型',
+      'model.infoLabel': '关于允许其他会话操作本会话',
       'model.description':
-        '开启后，本会话可以：读取可调模型列表、给其它会话换模型、给其它会话发消息。关闭后这些操作会被拒绝；查看会话和模型目录仍然可用。',
+        '开启后，其他会话可以：给本会话换模型、给本会话发消息。关闭后这些操作会被拒绝；本会话自己改自己的模型不受影响。',
       'model.failed': '没能保存开关：{message}',
     };
     const en = {
-      'model.label': "Let this session switch other sessions' models",
-      'model.infoLabel': 'About cross-session model switching',
+      'model.label': 'Allow other sessions to change this one',
+      'model.infoLabel': 'About letting other sessions act on this one',
       'model.description':
-        "When on, this session can read the model catalog, switch another live session's model, and message another session. When off, those calls are refused; listing sessions and models still works.",
+        'When on, other sessions can switch this session model and message it. When off, those calls are refused; this session can still change its own model.',
       'model.failed': 'Could not save the switch: {message}',
     };
 

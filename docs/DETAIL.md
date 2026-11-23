@@ -40,8 +40,9 @@ GET/POST /features/model-tools   按会话的换模型开关（本机、免 toke
 ### 按会话开关
 
 - 开关写在状态文件 `~/.dsh/session-bridge-features.json`：`{ "enabled": ["session-…"] }`。
-- **写操作**（`session_model_set`、`session_message_send`）要求调用方会话已开启；
-  **只读**（`session_model_list`、`session_model_catalog`）不受影响。
+- 语义是**目标会话同意**：`session_model_set` / `session_message_send` 要求**目标会话**已开启
+  「允许其他会话更换本会话的模型」；自己改自己、自己给自己发消息不受限制。
+- **只读**（`session_model_list`、`session_model_catalog`）不受影响。
 - 开关入口：输入框模型菜单里的一行开关（客户端半），或直接 `POST /features/model-tools`。
 
 ## 安全说明
