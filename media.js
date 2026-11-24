@@ -33,6 +33,12 @@ const DEFAULT_REPLICATE_HOST = 'https://api.replicate.com';
 
 const KINDS = ['openai', 'dashscope', 'ark', 'zhipu', 'fal', 'stability', 'elevenlabs', 'google', 'replicate'];
 
+function serviceOf(ctx, name) {
+  if (!ctx) return undefined;
+  if (typeof ctx.get === 'function') return ctx.get(name);
+  return ctx[name];
+}
+
 function mediaKindOf(id, name) {
   const value = `${id || ''} ${name || ''}`;
   if (/(image|seedream|cogview|dall-e|flux|imagen|stable-diffusion|sd3|ocr)/i.test(value)) return 'image';
@@ -136,7 +142,7 @@ async function resolveKey(ctx, entry) {
   const envName = entry.apiKeyEnv;
   if (entry.apiKey) return String(entry.apiKey);
   if (envName && process.env[envName]) return process.env[envName];
-  const credentials = ctx && ctx.credentials;
+  const credentials = serviceOf(ctx, 'credentials');
   if (envName && credentials && typeof credentials.resolve === 'function') {
     const resolved = await credentials.resolve(envName);
     if (resolved && resolved.value) return resolved.value;
@@ -202,6 +208,25 @@ function fileOf(dir, kind, ext) {
   return join(dir, `${kind}-${stamp()}.${ext}`);
 }
 
+function pcmToWav(pcm, sampleRate = 24000, channels = 1, bits = 16) {
+  const data = Buffer.from(pcm);
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + data.length, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE((sampleRate * channels * bits) / 8, 28);
+  header.writeUInt16LE((channels * bits) / 8, 32);
+  header.writeUInt16LE(bits, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(data.length, 40);
+  return Buffer.concat([header, data]);
+}
+
 function decodeBase64(value) {
   return Buffer.from(String(value).replace(/^data:[^,]+,/, ''), 'base64');
 }
@@ -222,7 +247,7 @@ async function pollUntil(fn, done, deadlineMs, intervalMs = 5000) {
 }
 
 async function imageBlock(ctx, bytes, mediaType) {
-  const attachments = ctx && ctx.attachments;
+  const attachments = serviceOf(ctx, 'attachments');
   if (!attachments || typeof attachments.saveImages !== 'function') return null;
   try {
     const [ref] = await attachments.saveImages([{ data: bytes, mediaType }]);
@@ -233,7 +258,7 @@ async function imageBlock(ctx, bytes, mediaType) {
 }
 
 async function fileBlock(ctx, file, mediaType) {
-  const attachments = ctx && ctx.attachments;
+  const attachments = serviceOf(ctx, 'attachments');
   if (!attachments || typeof attachments.saveFile !== 'function') return null;
   try {
     const data = await readFile(file);
@@ -562,7 +587,13 @@ async function audio_google(ctx, config, route, text, opts) {
   const inline = parts.find((part) => part && part.inlineData && part.inlineData.data);
   if (!inline) throw new Error(`接口没有返回音频：${JSON.stringify(data).slice(0, 300)}`);
   const dir = await ensureDir(config.outputDir || defaultOutputDir());
-  return { saved: await saveBytes(fileOf(dir, 'audio', 'wav'), decodeBase64(inline.inlineData.data)), format: 'wav', voice };
+  const mime = inline.inlineData.mimeType || '';
+  const raw = decodeBase64(inline.inlineData.data);
+  const rateMatch = /rate=(\d+)/.exec(mime);
+  const sampleRate = rateMatch ? Number(rateMatch[1]) : 24000;
+  // Gemini TTS 返回裸 PCM（audio/L16），必须包 WAV 头才可播放
+  const saved = mime.includes('wav') ? await saveBytes(fileOf(dir, 'audio', 'wav'), raw) : await saveBytes(fileOf(dir, 'audio', 'wav'), pcmToWav(raw, sampleRate));
+  return { saved, format: 'wav', voice };
 }
 
 async function audio_replicate(ctx, config, route, text, opts) {
@@ -681,12 +712,13 @@ export function createMediaTools(ctx, options = {}) {
     },
     timeoutMs: 15000,
     async execute() {
-      const providers = (ctx.llm && ctx.llm.listProviders ? ctx.llm.listProviders() : []);
+      const llm = serviceOf(ctx, 'llm');
+      const providers = (llm && llm.listProviders ? llm.listProviders() : []);
       const out = [];
       for (const provider of providers) {
         let models = [];
         try {
-          models = await ctx.llm.listModels(provider.id);
+          models = await llm.listModels(provider.id);
         } catch {
           models = [];
         }
@@ -742,7 +774,9 @@ export function createMediaTools(ctx, options = {}) {
       if (!route.model) throw new Error(`provider "${route.providerId}" 需要 image model`);
       const saved = await run('image', route, [prompt, { extra: args.extra }]);
       const bytes = await readFile(saved.file);
-      const block = await imageBlock(ctx, bytes, 'image/png');
+      const ext = saved.file.split('.').pop();
+      const mediaType = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'image/png';
+      const block = await imageBlock(ctx, bytes, mediaType);
       return { ok: true, kind: 'image', provider: route.providerId, model: route.model, prompt, file: saved.file, bytes: saved.bytes, block };
     },
   };
@@ -846,5 +880,5 @@ export function apply(ctx, config) {
 }
 
 export const name = 'media';
-export const inject = ['tools', 'credentials', 'attachments', 'llm'];
+export const inject = ['tools'];
 export { mediaKindOf, providerTable, ADAPTERS };

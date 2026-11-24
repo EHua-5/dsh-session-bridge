@@ -386,6 +386,8 @@ export function createTools(ctx, options = {}) {
       const text = String((args && args.text) || '').trim();
       if (!sessionId || !text) throw new Error('sessionId / text 都是必填');
       const agent = requireAgent(sessionId);
+      const me = callerId();
+      if (me && me === sessionId) throw new Error('不能给自己发消息：目标必须是另一个会话');
       const source = String((args && args.source) || '').trim().slice(0, 40);
       const hint = String((args && args.hint) || '').trim().slice(0, 200);
       const body = hint

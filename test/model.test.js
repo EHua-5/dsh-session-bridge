@@ -490,3 +490,9 @@ test('message：hint 会附在消息末尾（告诉对方用哪个工具）', as
   const plain = target.messages[1].content.map((block) => block.text || '').join('\n');
   assert.doesNotMatch(plain, /提示：本会话可用/);
 });
+
+test('message：不能给自己发消息', async () => {
+  const self = makeAgent('session-a');
+  const tools = createTools(makeCtx([self], { caller: { id: 'session-a' } }));
+  await assert.rejects(() => tools.message.execute({ sessionId: 'session-a', text: 'hi' }), /不能给自己发消息/);
+});
