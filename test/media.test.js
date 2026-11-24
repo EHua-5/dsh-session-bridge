@@ -504,3 +504,25 @@ test('zhipu 视频：提交 + async-result', async () => {
     }
   });
 });
+
+test('google gemini 图片：generateContent + inlineData', async () => {
+  await withDir(async (dir) => {
+    const tools = createMediaTools(ctxWith(), {
+      outputDir: dir,
+      providers: { google: { kind: 'google', host: 'https://generativelanguage.googleapis.com', apiKeyEnv: 'BAILIAN_TPP_API_KEY' } },
+    });
+    const b64 = Buffer.from([4, 4]).toString('base64');
+    const stub = stubFetch([
+      { match: (href) => href.includes(':generateContent'), reply: jsonReply({ candidates: [{ content: { parts: [{ inlineData: { data: b64, mimeType: 'image/png' } }] } }] }) },
+    ]);
+    try {
+      const value = await tools.image.execute({ prompt: '猫', model: 'google/gemini-3.1-flash-lite-image' });
+      assert.equal(value.bytes, 2);
+      assert.match(value.file, /\.png$/);
+      const body = JSON.parse(stub.calls[0].init.body);
+      assert.deepEqual(body.generationConfig.responseModalities, ['TEXT', 'IMAGE']);
+    } finally {
+      stub.restore();
+    }
+  });
+});

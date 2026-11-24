@@ -333,19 +333,40 @@ async function image_fal(ctx, config, route, prompt, opts) {
 async function image_google(ctx, config, route, prompt, opts) {
   const key = await resolveKey(ctx, route.entry);
   const model = route.model || route.entry.imageModel;
-  if (!model) throw new Error('google 图片需要 model（如 imagen-4.0-generate-001）');
-  const body = mergeExtra({ instances: [{ prompt }], parameters: { sampleCount: 1 } }, opts.extra);
+  if (!model) throw new Error('google 图片需要 model（如 imagen-4.0-generate-001 或 gemini-*-image）');
+  const dir = await ensureDir(config.outputDir || defaultOutputDir());
+
+  // Imagen 系走 :predict；Gemini 原生图片模型走 :generateContent
+  if (/imagen/i.test(model)) {
+    const body = mergeExtra({ instances: [{ prompt }], parameters: { sampleCount: 1 } }, opts.extra);
+    const data = await postJson(
+      `${route.entry.host}/v1beta/models/${encodeURIComponent(model)}:predict?key=${encodeURIComponent(key)}`,
+      {},
+      body,
+      180000,
+    );
+    const item = (data.predictions || [])[0] || {};
+    if (item.bytesBase64Encoded) return saveBytes(fileOf(dir, 'image', 'png'), decodeBase64(item.bytesBase64Encoded));
+    if (item.uri) return download(item.uri, fileOf(dir, 'image', 'png'), 120000, { 'x-goog-api-key': key });
+    throw new Error(`图片接口没有返回结果：${JSON.stringify(data).slice(0, 300)}`);
+  }
+
+  const body = mergeExtra(
+    { contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseModalities: ['TEXT', 'IMAGE'] } },
+    opts.extra,
+  );
   const data = await postJson(
-    `${route.entry.host}/v1beta/models/${encodeURIComponent(model)}:predict?key=${encodeURIComponent(key)}`,
+    `${route.entry.host}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`,
     {},
     body,
     180000,
   );
-  const item = (data.predictions || [])[0] || {};
-  const dir = await ensureDir(config.outputDir || defaultOutputDir());
-  if (item.bytesBase64Encoded) return saveBytes(fileOf(dir, 'image', 'png'), decodeBase64(item.bytesBase64Encoded));
-  if (item.uri) return download(item.uri, fileOf(dir, 'image', 'png'), 120000, { 'x-goog-api-key': key });
-  throw new Error(`图片接口没有返回结果：${JSON.stringify(data).slice(0, 300)}`);
+  const parts = (((data.candidates || [])[0] || {}).content || {}).parts || [];
+  const inline = parts.find((part) => part && part.inlineData && part.inlineData.data);
+  if (!inline) throw new Error(`图片接口没有返回结果：${JSON.stringify(data).slice(0, 300)}`);
+  const mime = inline.inlineData.mimeType || 'image/png';
+  const ext = mime.includes('jpeg') ? 'jpg' : mime.includes('webp') ? 'webp' : 'png';
+  return saveBytes(fileOf(dir, 'image', ext), decodeBase64(inline.inlineData.data));
 }
 
 async function image_replicate(ctx, config, route, prompt, opts) {
