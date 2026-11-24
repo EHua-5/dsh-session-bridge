@@ -476,3 +476,17 @@ test('set：生成类模型默认拒绝，allowNonChat:true 放行', async () =>
   assert.equal(value.kind, 'media');
   assert.deepEqual(target.model.current(), { provider: 'bailian-tpp', model: 'wan2.7-image' });
 });
+
+test('message：hint 会附在消息末尾（告诉对方用哪个工具）', async () => {
+  const target = makeAgent('session-b');
+  const tools = createTools(makeCtx([target]));
+  const value = await tools.message.execute({ sessionId: 'session-b', text: '画一张雪地小猫', hint: 'image_generate' });
+  assert.equal(value.hinted, true);
+  const text = target.messages[0].content.map((block) => block.text || '').join('\n');
+  assert.match(text, /\[提示：本会话可用 image_generate 工具/);
+  assert.match(text, /不需要切换聊天模型/);
+  // 不带 hint 时保持原样
+  await tools.message.execute({ sessionId: 'session-b', text: '纯文本' });
+  const plain = target.messages[1].content.map((block) => block.text || '').join('\n');
+  assert.doesNotMatch(plain, /提示：本会话可用/);
+});

@@ -369,6 +369,12 @@ export function createTools(ctx, options = {}) {
         sessionId: { type: 'string', description: '目标会话 id（session-…）' },
         text: { type: 'string', description: '消息正文' },
         source: { type: 'string', description: '可选标签，最多 40 字；渲染成 [session-bridge:<source>] ' },
+        hint: {
+          type: 'string',
+          description:
+            '可选工具提示：目标会话该用哪个工具（如 image_generate / video_generate / audio_generate）。' +
+            '会以 [提示：…] 附在消息末尾，解决“对方不知道要用工具、不知道要不要换模型”的问题。',
+        },
       },
       required: ['sessionId', 'text'],
       additionalProperties: false,
@@ -381,8 +387,12 @@ export function createTools(ctx, options = {}) {
       if (!sessionId || !text) throw new Error('sessionId / text 都是必填');
       const agent = requireAgent(sessionId);
       const source = String((args && args.source) || '').trim().slice(0, 40);
-      const sent = sendMessage(agent, text, source);
-      return { ok: true, sessionId, id: sent.id, queued: sent.queued };
+      const hint = String((args && args.hint) || '').trim().slice(0, 200);
+      const body = hint
+        ? `${text}\n\n[提示：本会话可用 ${hint} 工具；图片/视频/音频生成请求请直接调用该工具，不需要切换聊天模型。]`
+        : text;
+      const sent = sendMessage(agent, body, source);
+      return { ok: true, sessionId, id: sent.id, queued: sent.queued, hinted: hint.length > 0 };
     },
   };
 
