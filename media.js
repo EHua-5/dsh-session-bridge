@@ -110,13 +110,20 @@ function parseModelRef(modelArg) {
   return { model: value };
 }
 
-function pickRoute(config, modelArg) {
+function pickRoute(config, modelArg, modality) {
   const table = providerTable(config);
   const parsed = parseModelRef(modelArg) || {};
   let providerId = parsed.provider || (config && config.defaultProvider) || '';
   if (!providerId) {
     const ids = Object.keys(table);
     if (ids.length === 1) providerId = ids[0];
+    else if (modality) {
+      // 多 provider 且调用方没指定时，挑第一个支持该模态的（按配置顺序，确定性）
+      providerId = ids.find((id) => {
+        const adapter = ADAPTERS[table[id].kind];
+        return Boolean(adapter && adapter[modality]);
+      }) || '';
+    }
   }
   if (providerId && !table[providerId] && table.__default !== undefined) providerId = '__default';
   const entry = providerId ? table[providerId] : undefined;
@@ -766,7 +773,7 @@ export function createMediaTools(ctx, options = {}) {
     async execute(args) {
       const prompt = String((args && args.prompt) || '').trim();
       if (!prompt) throw new Error('prompt 必填');
-      const route = pickRoute(config, args && args.model);
+      const route = pickRoute(config, args && args.model, 'image');
       if (!ADAPTERS[route.entry.kind] || !ADAPTERS[route.entry.kind].image) {
         throw new Error(`provider "${route.providerId}"（kind=${route.entry.kind}）不支持图片生成`);
       }
@@ -810,7 +817,7 @@ export function createMediaTools(ctx, options = {}) {
     async execute(args) {
       const prompt = String((args && args.prompt) || '').trim();
       if (!prompt) throw new Error('prompt 必填');
-      const route = pickRoute(config, args && args.model);
+      const route = pickRoute(config, args && args.model, 'video');
       if (!ADAPTERS[route.entry.kind] || !ADAPTERS[route.entry.kind].video) {
         throw new Error(`provider "${route.providerId}"（kind=${route.entry.kind}）不支持视频生成`);
       }
@@ -850,7 +857,7 @@ export function createMediaTools(ctx, options = {}) {
     async execute(args) {
       const text = String((args && args.text) || '').trim();
       if (!text) throw new Error('text 必填');
-      const route = pickRoute(config, args && args.model);
+      const route = pickRoute(config, args && args.model, 'audio');
       if (!ADAPTERS[route.entry.kind] || !ADAPTERS[route.entry.kind].audio) {
         throw new Error(`provider "${route.providerId}"（kind=${route.entry.kind}）不支持音频生成`);
       }

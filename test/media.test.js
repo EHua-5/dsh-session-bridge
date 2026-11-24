@@ -526,3 +526,26 @@ test('google gemini 图片：generateContent + inlineData', async () => {
     }
   });
 });
+
+test('多 provider 不写 model 时按能力自动挑（audio → dashscope）', async () => {
+  await withDir(async (dir) => {
+    const tools = createMediaTools(ctxWith(), {
+      outputDir: dir,
+      providers: {
+        ark: { kind: 'ark', host: 'https://ark.example', apiKeyEnv: 'BAILIAN_TPP_API_KEY' },
+        bailian: { kind: 'dashscope', host: 'https://dash.example', apiKeyEnv: 'BAILIAN_TPP_API_KEY' },
+      },
+    });
+    const stub = stubFetch([
+      { match: '/api/v1/services/audio/tts/SpeechSynthesizer', reply: jsonReply({ output: { audio: { url: 'https://cdn.example/a.mp3' } } }) },
+      { match: 'cdn.example/a.mp3', reply: bytesReply(new Uint8Array([1]), 'audio/mpeg') },
+    ]);
+    try {
+      const value = await tools.audio.execute({ text: '你好' });
+      assert.equal(value.provider, 'bailian');
+      assert.equal(value.model, 'qwen-audio-3.0-tts-plus');
+    } finally {
+      stub.restore();
+    }
+  });
+});
