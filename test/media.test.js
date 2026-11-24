@@ -82,7 +82,7 @@ test('image：接口没图时报错', async () => {
   const tools = createMediaTools(ctxWith(), { outputDir: 'x' });
   const stub = stubFetch([{ match: '/chat/completions', reply: jsonReply({ output: { choices: [{ message: { content: [] } }] } }) }]);
   try {
-    await assert.rejects(() => tools.image.execute({ prompt: 'x' }), /没有返回图片/);
+    await assert.rejects(() => tools.image.execute({ prompt: 'x' }), /图片接口没有返回结果/);
   } finally {
     stub.restore();
   }
@@ -247,5 +247,82 @@ test('openai 音频：/v1/audio/speech 返回字节', async () => {
 
 test('openai provider 下视频明确报错', async () => {
   const tools = createMediaTools(ctxWith(), { outputDir: 'x', provider: 'openai' });
-  await assert.rejects(() => tools.video.execute({ prompt: 'x' }), /只支持 DashScope/);
+  await assert.rejects(() => tools.video.execute({ prompt: 'x' }), /没有标准的视频生成接口/);
+});
+
+function ctxWithLlm(providers) {
+  return {
+    credentials: { resolve: async (ref) => (ref === 'TEST_KEY' ? { value: KEY, source: 'file' } : undefined) },
+    llm: {
+      listProviders: () => providers.map(([id]) => ({ id, name: id })),
+      listModels: async (id) => {
+        const entry = providers.find(([pid]) => pid === id);
+        return (entry && entry[1]) || [];
+      },
+    },
+  };
+}
+
+test('media_models：列出能生成的多模态模型并标出可调用', async () => {
+  const ctx = ctxWithLlm([
+    ['ark', [{ provider: 'ark', id: 'doubao-seedream-5-0', name: 'Seedream' }, { provider: 'ark', id: 'doubao-seed-2.1-pro', name: 'Seed' }]],
+    ['bailian', [{ provider: 'bailian', id: 'wan2.7-image', name: 'Wan' }]],
+  ]);
+  const tools = createMediaTools(ctx, {
+    outputDir: 'x',
+    providers: { ark: { kind: 'ark', host: 'https://ark.example', apiKeyEnv: 'TEST_KEY' } },
+  });
+  const value = await tools.models.execute({});
+  const byId = Object.fromEntries(value.providers.map((entry) => [entry.id, entry]));
+  assert.deepEqual(byId.ark.models.map((m) => m.id), ['doubao-seedream-5-0']);
+  assert.equal(byId.ark.callable, true);
+  assert.equal(byId.bailian.callable, false);
+  const text = tools.models.output.render({}, value)[0].text;
+  assert.match(text, /\[image\] doubao-seedream-5-0/);
+});
+
+test('ark 图片：/api/v3/images/generations + url 下载', async () => {
+  await withDir(async (dir) => {
+    const tools = createMediaTools(ctxWith(), {
+      outputDir: dir,
+      providers: { ark: { kind: 'ark', host: 'https://ark.example', apiKeyEnv: 'BAILIAN_TPP_API_KEY' } },
+    });
+    const stub = stubFetch([
+      { match: '/api/v3/images/generations', reply: jsonReply({ data: [{ url: 'https://cdn.example/ark.png' }] }) },
+      { match: 'cdn.example/ark.png', reply: bytesReply(new Uint8Array([1, 2, 3]), 'image/png') },
+    ]);
+    try {
+      const value = await tools.image.execute({ prompt: 'seedream', model: 'ark/doubao-seedream-5-0' });
+      assert.equal(value.provider, 'ark');
+      assert.equal(value.model, 'doubao-seedream-5-0');
+      assert.equal(value.bytes, 3);
+      const body = JSON.parse(stub.calls[0].init.body);
+      assert.equal(body.prompt, 'seedream');
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+test('ark 视频：提交任务 + 轮询 + 下载', async () => {
+  await withDir(async (dir) => {
+    const tools = createMediaTools(ctxWith(), {
+      outputDir: dir,
+      providers: { ark: { kind: 'ark', host: 'https://ark.example', apiKeyEnv: 'BAILIAN_TPP_API_KEY' } },
+    });
+    const stub = stubFetch([
+      { match: '/api/v3/contents/generations/tasks/cgt-1', reply: jsonReply({ status: 'succeeded', content: { video_url: 'https://cdn.example/ark.mp4' } }) },
+      { match: (href, init) => href.endsWith('/api/v3/contents/generations/tasks') && init.method === 'POST', reply: jsonReply({ id: 'cgt-1' }) },
+      { match: 'cdn.example/ark.mp4', reply: bytesReply(new Uint8Array([5, 5]), 'video/mp4') },
+    ]);
+    try {
+      const value = await tools.video.execute({ prompt: 'seedance', model: 'ark/doubao-seedance-1-0-pro' });
+      assert.equal(value.ok, true);
+      assert.equal(value.provider, 'ark');
+      assert.equal(value.taskId, 'cgt-1');
+      assert.equal(value.bytes, 2);
+    } finally {
+      stub.restore();
+    }
+  });
 });

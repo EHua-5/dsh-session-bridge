@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.0 — 2026-11-23
+
+- media 按 provider 路由：`media.config.providers` 表（provider id → kind/host/apiKeyEnv）。
+  新增 ark 适配器：图 `/api/v3/images/generations`、视频 `/api/v3/contents/generations/tasks` + 轮询；
+  openai 适配器保留；dashscope 保留。
+- 新增 `media_models` 工具：用 `ctx.llm.listProviders()/listModels()` 发现所有多模态模型，
+  标出哪些 provider 已配置生成端点；调用时 `model` 用 `provider/model`。
+- 没有 providers 表时保持旧的单后端配置兼容（默认 dashscope）。
+
 ## 0.6.0 — 2026-11-23
 
 - `media` 支持 `provider: openai`：图片走 `/v1/images/generations`（b64_json，回退 url）、

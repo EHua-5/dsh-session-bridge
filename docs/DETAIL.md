@@ -57,23 +57,30 @@ GET/POST /features/model-tools   按会话的换模型开关（本机、免 toke
 
 ## 生成类工具（media 行）
 
-与换模型无关：生图/视频/TTS 的 API 形状和 agent 对话不同，按各自端点调用，结果落到
-`~/.dsh/generated/`（可用 config.outputDir 改）。端点：
+工具：`media_models`（列出可调用的生成模型）、`image_generate`、`video_generate`、`audio_generate`。
 
-- 图：`POST /compatible-mode/v1/chat/completions`（user-only、content 数组）→ `output…content[].image`
-- 视频：`POST /api/v1/services/aigc/video-generation/video-synthesis`（`X-DashScope-Async: enable`）
-  → `output.task_id` → 轮询 `GET /api/v1/tasks/{id}` → `output.video_url`
-- 音频：`POST /api/v1/services/audio/tts/SpeechSynthesizer` → `output.audio.url`
+按 provider 路由到各厂商原生接口（`media.config.providers`，键为 llm provider id）：
 
-后端：`config.provider` 取 `dashscope`（默认）或 `openai`。
+```yaml
+providers:
+  bailian-tpp:
+    kind: dashscope              # 阿里系：图 chat/completions、视频异步任务、音频 SpeechSynthesizer
+    host: https://token-plan.cn-beijing.maas.aliyuncs.com
+    apiKeyEnv: BAILIAN_TPP_API_KEY
+  ark:
+    kind: ark                    # 火山方舟：图 /api/v3/images/generations、视频 /api/v3/contents/generations/tasks
+    host: https://ark.cn-beijing.volces.com
+    apiKeyEnv: ARK_API_KEY
+  openai:
+    kind: openai                 # OpenAI 兼容：图 /v1/images/generations、音频 /v1/audio/speech
+    host: https://api.openai.com
+    apiKeyEnv: OPENAI_API_KEY
+```
 
-- `dashscope`：图走 chat/completions（user-only + content 数组），视频走异步任务，音频走 SpeechSynthesizer；
-- `openai`：图走 `/v1/images/generations`（`b64_json`，回退 `url`），音频走 `/v1/audio/speech`（返回字节）；
-  视频没有事实标准，`openai` 下会明确报错（只支持 DashScope）。
-- `config.host` 覆盖端点（默认：dashscope=token-plan 主机，openai=`https://api.openai.com`）。
-
-key 解析顺序：`config.apiKey` → `config.apiKeyEnv`（默认 `BAILIAN_TPP_API_KEY`）对应的环境变量 → `ctx.credentials.resolve`。
-图片经附件服务转成 image block（GUI 直接显示）；附件不可用时退回 markdown 链接。
+- 调用时 `model` 传 `provider/model`（如 `ark/doubao-seedream-5-0`、`openai/gpt-image-1`）；省略走 `defaultProvider` 或唯一配置项。
+- 没有 `providers` 表时退回旧的单后端配置（`provider`/`host`/`apiKeyEnv`/`apiKey`），默认 dashscope。
+- 产物默认存 `~/.dsh/generated/`（`config.outputDir` 可改）；图片经附件服务转 image block。
+- `media_models` 用 `ctx.llm.listProviders()/listModels()` 发现所有多模态模型，并标出哪些 provider 已配置生成端点。
 
 ## 安全说明
 

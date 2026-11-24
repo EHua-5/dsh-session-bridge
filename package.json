@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-session-bridge",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "DSH session bridge: local HTTP inbox, cross-session model switching with target consent, and image/video/audio generation tools.",
   "type": "module",
   "license": "MIT",
