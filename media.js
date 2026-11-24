@@ -15,6 +15,9 @@
  * 未写 providers 时退回旧的单后端配置（provider/host/apiKeyEnv/apiKey），默认 dashscope。
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import http from 'node:http';
+import https from 'node:https';
+import tls from 'node:tls';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -32,6 +35,100 @@ const DEFAULT_GOOGLE_HOST = 'https://generativelanguage.googleapis.com';
 const DEFAULT_REPLICATE_HOST = 'https://api.replicate.com';
 
 const KINDS = ['openai', 'dashscope', 'ark', 'zhipu', 'fal', 'stability', 'elevenlabs', 'google', 'replicate'];
+
+// Node 的 fetch 不走系统代理；需要时用 CONNECT 隧道（http/https 代理）
+let ACTIVE_PROXY = '';
+
+async function withProxy(entry, config, fn) {
+  ACTIVE_PROXY = String((entry && entry.proxy) || (config && config.proxy) || '');
+  try {
+    return await fn();
+  } finally {
+    ACTIVE_PROXY = '';
+  }
+}
+
+function proxyRequest(target, { method = 'GET', headers = {}, body }, proxyUrl, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(target);
+    const proxy = new URL(proxyUrl);
+    const isHttps = url.protocol === 'https:';
+    const targetPort = url.port || (isHttps ? '443' : '80');
+    let settled = false;
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    };
+    const timer = setTimeout(() => fail(new Error(`代理请求超时（${timeoutMs}ms）`)), timeoutMs);
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    const send = (socket) => {
+      const request = http.request(
+        {
+          host: url.hostname,
+          port: targetPort,
+          path: `${url.pathname}${url.search}`,
+          method,
+          headers,
+          ...(socket === undefined ? {} : { createConnection: () => socket }),
+        },
+        (response) => {
+          const chunks = [];
+          response.on('data', (chunk) => chunks.push(chunk));
+          response.on('end', () => finish({ status: response.statusCode, headers: response.headers, buffer: Buffer.concat(chunks) }));
+        },
+      );
+      request.on('error', fail);
+      if (body !== undefined) request.write(body);
+      request.end();
+    };
+
+    if (!isHttps) {
+      // 明文目标：代理走 absolute-form
+      const request = http.request(
+        { host: proxy.hostname, port: proxy.port || 80, path: target, method, headers },
+        (response) => {
+          const chunks = [];
+          response.on('data', (chunk) => chunks.push(chunk));
+          response.on('end', () => finish({ status: response.statusCode, headers: response.headers, buffer: Buffer.concat(chunks) }));
+        },
+      );
+      request.on('error', fail);
+      if (body !== undefined) request.write(body);
+      request.end();
+      return;
+    }
+
+    const connect = http.request({
+      host: proxy.hostname,
+      port: proxy.port || 80,
+      method: 'CONNECT',
+      path: `${url.hostname}:${targetPort}`,
+      headers: { host: `${url.hostname}:${targetPort}` },
+    });
+    connect.on('connect', (response, socket) => {
+      if (response.statusCode !== 200) {
+        fail(new Error(`代理 CONNECT 失败 ${response.statusCode}`));
+        return;
+      }
+      const secure = tls.connect({ socket, servername: url.hostname }, () => send(secure));
+      secure.on('error', fail);
+    });
+    connect.on('error', fail);
+    connect.end();
+  });
+}
+
+function concatHeaders(base, extra) {
+  return { ...base, ...(extra || {}) };
+}
 
 function serviceOf(ctx, name) {
   if (!ctx) return undefined;
@@ -158,6 +255,13 @@ async function resolveKey(ctx, entry) {
 }
 
 async function request(url, method, headers, body, timeoutMs) {
+  if (ACTIVE_PROXY) {
+    const result = await proxyRequest(url, { method, headers, body }, ACTIVE_PROXY, timeoutMs);
+    if (result.status < 200 || result.status >= 300) {
+      throw new Error(`HTTP ${result.status}: ${result.buffer.subarray(0, 500).toString('utf8')}`);
+    }
+    return { buffer: result.buffer, contentType: result.headers['content-type'] || '' };
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -185,6 +289,13 @@ async function getJson(url, headers, timeoutMs) {
 }
 
 async function download(url, file, timeoutMs, headers) {
+  if (ACTIVE_PROXY) {
+    const result = await proxyRequest(url, { method: 'GET', headers }, ACTIVE_PROXY, timeoutMs);
+    if (result.status < 200 || result.status >= 300) throw new Error(`下载失败 HTTP ${result.status}`);
+    await ensureDir(join(file, '..'));
+    await writeFile(file, result.buffer);
+    return { file, bytes: result.buffer.byteLength };
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -782,7 +893,7 @@ export function createMediaTools(ctx, options = {}) {
       }
       route.model = route.model || route.entry.imageModel || config.imageModel || DEFAULT_IMAGE_MODEL[route.entry.kind];
       if (!route.model) throw new Error(`provider "${route.providerId}" 需要 image model`);
-      const saved = await run('image', route, [prompt, { extra: args.extra }]);
+      const saved = await withProxy(route.entry, config, () => run('image', route, [prompt, { extra: args.extra }]));
       const bytes = await readFile(saved.file);
       const ext = saved.file.split('.').pop();
       const mediaType = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'image/png';
@@ -826,7 +937,7 @@ export function createMediaTools(ctx, options = {}) {
       }
       route.model = route.model || route.entry.videoModel || config.videoModel || DEFAULT_VIDEO_MODEL[route.entry.kind];
       if (!route.model) throw new Error(`provider "${route.providerId}" 需要 video model`);
-      const result = await run('video', route, [prompt, args || {}]);
+      const result = await withProxy(route.entry, config, () => run('video', route, [prompt, args || {}]));
       const block = await fileBlock(ctx, result.saved.file, 'video/mp4');
       return { ok: true, kind: 'video', provider: route.providerId, model: route.model, prompt, taskId: result.taskId, file: result.saved.file, bytes: result.saved.bytes, block };
     },
@@ -866,7 +977,7 @@ export function createMediaTools(ctx, options = {}) {
       }
       route.model = route.model || route.entry.audioModel || config.audioModel || DEFAULT_AUDIO_MODEL[route.entry.kind];
       if (!route.model) throw new Error(`provider "${route.providerId}" 需要 audio model`);
-      const result = await run('audio', route, [text, args || {}]);
+      const result = await withProxy(route.entry, config, () => run('audio', route, [text, args || {}]));
       const mediaType = result.format === 'wav' ? 'audio/wav' : result.format === 'opus' ? 'audio/opus' : 'audio/mpeg';
       const block = await fileBlock(ctx, result.saved.file, mediaType);
       return { ok: true, kind: 'audio', provider: route.providerId, model: route.model, voice: result.voice, format: result.format, file: result.saved.file, bytes: result.saved.bytes, block };
