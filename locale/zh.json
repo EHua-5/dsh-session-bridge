@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "会话桥",
-    "description": "本地 HTTP 收件箱（投递到活会话、按 dedupeKey 去重、可查投递结果）+ 跨会话换模型与发消息工具；换模型工具按会话开关，开关在输入框的模型菜单里。",
+    "description": "本地 HTTP 收件箱（投递到活会话、按 dedupeKey 去重、可查投递结果）+ 跨会话换模型/发消息工具 + 图片/视频/音频生成工具（9 种 provider 后端）；换模型按会话开关，开关在输入框的模型菜单里。",
     "detail": "docs/DETAIL.md"
   }
 }

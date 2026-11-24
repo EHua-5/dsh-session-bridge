@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-session-bridge",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "DSH session bridge: local HTTP inbox, cross-session model switching with target consent, and image/video/audio generation tools.",
   "type": "module",
   "license": "MIT",
@@ -8,7 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node test/inbox.test.js && node test/model.test.js"
+    "test": "node --test test/inbox.test.js test/model.test.js test/media.test.js"
   },
   "exports": {
     ".": "./model.js",
@@ -32,7 +32,8 @@
     "README.md",
     "README.zh.md",
     "LICENSE",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "media.js"
   ],
   "keywords": [
     "dsh",
@@ -55,7 +56,8 @@
       "inject": [
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-model-selection",
-        "@deepseek-ai/dsh-client-locale"
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-primitives"
       ]
     }
   }

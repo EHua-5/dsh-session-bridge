@@ -55,7 +55,7 @@ test('image：解析 output…image 并落盘', async () => {
   await withDir(async (dir) => {
     const tools = createMediaTools(ctxWith(), { outputDir: dir });
     const stub = stubFetch([
-      { match: '/compatible-mode/v1/chat/completions', reply: jsonReply({ output: { choices: [{ message: { content: [{ type: 'image', image: 'https://cdn.example/a.png' }] } }] } }) },
+      { match: '/api/v1/services/aigc/multimodal-generation/generation', reply: jsonReply({ output: { choices: [{ message: { content: [{ image: 'https://cdn.example/a.png' }] } }] } }) },
       { match: 'cdn.example/a.png', reply: bytesReply(new Uint8Array([1, 2, 3]), 'image/png') },
     ]);
     try {
@@ -70,8 +70,8 @@ test('image：解析 output…image 并落盘', async () => {
       assert.match(text, /!\[一只狐狸\]/);
       // 请求体：user-only + content 数组
       const body = JSON.parse(stub.calls[0].init.body);
-      assert.equal(body.messages[0].role, 'user');
-      assert.deepEqual(body.messages[0].content, [{ type: 'text', text: '一只狐狸' }]);
+      assert.equal(body.input.messages[0].role, 'user');
+      assert.deepEqual(body.input.messages[0].content, [{ text: '一只狐狸' }]);
     } finally {
       stub.restore();
     }
@@ -80,7 +80,7 @@ test('image：解析 output…image 并落盘', async () => {
 
 test('image：接口没图时报错', async () => {
   const tools = createMediaTools(ctxWith(), { outputDir: 'x' });
-  const stub = stubFetch([{ match: '/chat/completions', reply: jsonReply({ output: { choices: [{ message: { content: [] } }] } }) }]);
+  const stub = stubFetch([{ match: '/multimodal-generation/generation', reply: jsonReply({ output: { choices: [{ message: { content: [] } }] } }) }]);
   try {
     await assert.rejects(() => tools.image.execute({ prompt: 'x' }), /图片接口没有返回结果/);
   } finally {
@@ -170,7 +170,7 @@ test('附件服务可用时返回 image block', async () => {
     });
     const tools = createMediaTools(ctx, { outputDir: dir });
     const stub = stubFetch([
-      { match: '/chat/completions', reply: jsonReply({ output: { choices: [{ message: { content: [{ type: 'image', image: 'https://cdn.example/b.png' }] } }] } }) },
+      { match: '/multimodal-generation/generation', reply: jsonReply({ output: { choices: [{ message: { content: [{ image: 'https://cdn.example/b.png' }] } }] } }) },
       { match: 'cdn.example/b.png', reply: bytesReply(new Uint8Array([5]), 'image/png') },
     ]);
     try {
@@ -200,7 +200,7 @@ test('openai 图片：/v1/images/generations + b64_json', async () => {
       assert.equal(value.bytes, 4);
       const body = JSON.parse(stub.calls[0].init.body);
       assert.equal(body.prompt, '一只猫');
-      assert.equal(body.response_format, 'b64_json');
+      assert.equal(body.response_format, undefined, 'gpt-image-1 不接受 response_format');
     } finally {
       stub.restore();
     }
@@ -233,7 +233,7 @@ test('openai 音频：/v1/audio/speech 返回字节', async () => {
       const value = await tools.audio.execute({ text: '你好' });
       assert.equal(value.ok, true);
       assert.equal(value.provider, 'openai');
-      assert.equal(value.model, 'tts-1');
+      assert.equal(value.model, 'gpt-4o-mini-tts');
       assert.equal(value.voice, 'alloy');
       assert.equal(value.bytes, 3);
       const body = JSON.parse(stub.calls[0].init.body);
@@ -544,6 +544,84 @@ test('多 provider 不写 model 时按能力自动挑（audio → dashscope）',
       const value = await tools.audio.execute({ text: '你好' });
       assert.equal(value.provider, 'bailian');
       assert.equal(value.model, 'qwen-audio-3.0-tts-plus');
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+test('openai 图片：dall-e 系显式要 b64', async () => {
+  await withDir(async (dir) => {
+    const tools = createMediaTools(ctxWith(), { outputDir: dir, provider: 'openai' });
+    const b64 = Buffer.from([1]).toString('base64');
+    const stub = stubFetch([
+      { match: '/v1/images/generations', reply: jsonReply({ data: [{ b64_json: b64 }] }) },
+    ]);
+    try {
+      await tools.image.execute({ prompt: 'x', model: 'dall-e-3' });
+      const body = JSON.parse(stub.calls[0].init.body);
+      assert.equal(body.response_format, 'b64_json');
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+test('stability：不传 model 也能生成（core 端点不需要 model）', async () => {
+  await withDir(async (dir) => {
+    const tools = createMediaTools(ctxWith(), {
+      outputDir: dir,
+      providers: { stability: { kind: 'stability', host: 'https://api.stability.ai', apiKeyEnv: 'BAILIAN_TPP_API_KEY' } },
+    });
+    const stub = stubFetch([
+      { match: '/v2beta/stable-image/generate/core', reply: bytesReply(new Uint8Array([1]), 'image/png') },
+    ]);
+    try {
+      const value = await tools.image.execute({ prompt: '猫' });
+      assert.equal(value.bytes, 1);
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+test('replicate：官方 owner/name 走 version 字段', async () => {
+  await withDir(async (dir) => {
+    const tools = createMediaTools(ctxWith(), {
+      outputDir: dir,
+      providers: { replicate: { kind: 'replicate', host: 'https://api.replicate.com', apiKeyEnv: 'BAILIAN_TPP_API_KEY' } },
+    });
+    const stub = stubFetch([
+      { match: (href, init) => href.endsWith('/v1/predictions') && init.method === 'POST', reply: jsonReply({ id: 'p2' }) },
+      { match: (href) => href.endsWith('/v1/predictions/p2'), reply: jsonReply({ status: 'succeeded', output: 'https://cdn.example/r2.png' }) },
+      { match: 'cdn.example/r2.png', reply: bytesReply(new Uint8Array([1]), 'image/png') },
+    ]);
+    try {
+      await tools.image.execute({ prompt: '猫', model: 'replicate/black-forest-labs/flux-schnell' });
+      const body = JSON.parse(stub.calls[0].init.body);
+      assert.equal(body.version, 'black-forest-labs/flux-schnell');
+      assert.equal(body.model, undefined);
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+test('replicate 音频：输出字段完整（无 undefined）', async () => {
+  await withDir(async (dir) => {
+    const tools = createMediaTools(ctxWith(), {
+      outputDir: dir,
+      providers: { replicate: { kind: 'replicate', host: 'https://api.replicate.com', apiKeyEnv: 'BAILIAN_TPP_API_KEY' } },
+    });
+    const stub = stubFetch([
+      { match: (href, init) => href.endsWith('/v1/predictions') && init.method === 'POST', reply: jsonReply({ id: 'a1' }) },
+      { match: (href) => href.endsWith('/v1/predictions/a1'), reply: jsonReply({ status: 'succeeded', output: ['https://cdn.example/a.mp3'] }) },
+      { match: 'cdn.example/a.mp3', reply: bytesReply(new Uint8Array([1, 1]), 'audio/mpeg') },
+    ]);
+    try {
+      const value = await tools.audio.execute({ text: '你好', model: 'replicate/some/tts:abc' });
+      assert.equal(value.format, 'mp3');
+      assert.deepEqual(JSON.parse(JSON.stringify(value)), value);
     } finally {
       stub.restore();
     }

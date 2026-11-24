@@ -712,17 +712,43 @@ test('/features：默认为关，POST 打开/关闭并可回读', async () => {
   }
 });
 
-test('/features：缺 sessionId 400；跨域响应头与预检', async () => {
+test('/features：缺 sessionId 400；回环 Origin 才反射，外部 Origin/Host 拒绝', async () => {
   const { bridge, base } = await withBridge({ agents: [makeAgent('session-a')] });
   try {
     const bad = await fetch(base + '/features/model-tools');
     assert.equal(bad.status, 400);
-    assert.equal(bad.headers.get('access-control-allow-origin'), '*');
+    assert.equal(bad.headers.get('access-control-allow-origin'), null, '无 Origin 不返回 CORS 头');
 
-    const preflight = await fetch(base + '/features/model-tools', { method: 'OPTIONS' });
+    // 回环页面：反射 Origin
+    const ok = await fetch(base + '/features/model-tools', { headers: { origin: 'http://127.0.0.1:5555' } });
+    assert.equal(ok.headers.get('access-control-allow-origin'), 'http://127.0.0.1:5555');
+
+    const preflight = await fetch(base + '/features/model-tools', {
+      method: 'OPTIONS',
+      headers: { origin: 'http://127.0.0.1:5555' },
+    });
     assert.equal(preflight.status, 204);
-    assert.equal(preflight.headers.get('access-control-allow-origin'), '*');
+    assert.equal(preflight.headers.get('access-control-allow-origin'), 'http://127.0.0.1:5555');
     assert.match(preflight.headers.get('access-control-allow-methods') || '', /POST/);
+
+    // 远程网页：拒绝（S1）
+    const foreign = await fetch(base + '/features/model-tools', { headers: { origin: 'https://evil.example' } });
+    assert.equal(foreign.status, 403);
+
+    // 非回环 Host（DNS rebinding）：拒绝。fetch 会自己写 Host，这里用原始 http 请求模拟
+    const rebindStatus = await new Promise((resolve, reject) => {
+      const u = new URL(base + '/health');
+      const req = http.request(
+        { hostname: u.hostname, port: u.port, path: '/health', headers: { host: 'evil.example' } },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode);
+        },
+      );
+      req.on('error', reject);
+      req.end();
+    });
+    assert.equal(rebindStatus, 403);
   } finally {
     await bridge.stop();
   }

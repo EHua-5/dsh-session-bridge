@@ -52,9 +52,21 @@ window.__ModuleLoader__.load({
     // 避免先 return null 再出现造成的闪烁；并发挂载也只发一次请求。
     const featureCache = new Map();
     const featureInflight = new Map();
+    // 缓存 5 秒内可信；超过就后台重取一次（stale-while-revalidate），避免跨窗口一直显示旧值
+    const FEATURE_TTL_MS = 5000;
 
     function cachedFeature(sessionId) {
-      return featureCache.has(sessionId) ? featureCache.get(sessionId) : null;
+      const entry = featureCache.get(sessionId);
+      return entry ? entry.value : null;
+    }
+
+    function cacheFresh(sessionId) {
+      const entry = featureCache.get(sessionId);
+      return Boolean(entry) && Date.now() - entry.at < FEATURE_TTL_MS;
+    }
+
+    function setCachedFeature(sessionId, value) {
+      featureCache.set(sessionId, { value, at: Date.now() });
     }
 
     function loadFeature(sessionId) {
@@ -63,7 +75,7 @@ window.__ModuleLoader__.load({
         .then((response) => response.json())
         .then((value) => {
           const on = Boolean(value && value.enabled);
-          featureCache.set(sessionId, on);
+          setCachedFeature(sessionId, on);
           return on;
         })
         .catch(() => false)
@@ -110,10 +122,10 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         if (!sessionId) return undefined;
-        if (featureCache.has(sessionId)) {
-          setEnabled(featureCache.get(sessionId));
-          return undefined;
-        }
+        // 先用缓存渲染（防闪烁）；缓存过期时后台再校正
+        const cached = cachedFeature(sessionId);
+        if (cached !== null) setEnabled(cached);
+        if (cached !== null && cacheFresh(sessionId)) return undefined;
         let alive = true;
         loadFeature(sessionId).then((on) => {
           if (alive) setEnabled(on);
@@ -139,7 +151,7 @@ window.__ModuleLoader__.load({
           .then((value) => {
             if (value && value.ok) {
               const on = Boolean(value.enabled);
-              featureCache.set(sessionId, on);
+              setCachedFeature(sessionId, on);
               setEnabled(on);
             } else setFailure(String((value && value.error) || 'unknown error'));
           })

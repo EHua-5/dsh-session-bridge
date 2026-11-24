@@ -32,7 +32,7 @@ import { FeatureStore, defaultFeaturesFile } from './shared.js';
 export const name = 'inbox-bridge';
 
 /** 插件版本：/health.version 会报出来，维护域据此核对部署的是哪版。 */
-export const version = '0.8.0';
+export const version = '0.8.1';
 
 const MAX_BODY = 64 * 1024;
 const DEFAULT_PORT = 39881;
@@ -136,6 +136,21 @@ function sessionIdOf(agent) {
   return String(agent.id || agent.sessionId || (agent.session && agent.session.id) || '');
 }
 
+function isLoopbackHostname(hostname) {
+  const value = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  return value === '127.0.0.1' || value === 'localhost' || value === '::1';
+}
+
+/** 浏览器来源只允许回环页面（GUI 是 127.0.0.1:<随机端口>）；无 Origin 视为非浏览器。 */
+function originAllowed(origin) {
+  if (!origin) return true;
+  try {
+    return isLoopbackHostname(new URL(origin).hostname);
+  } catch {
+    return false;
+  }
+}
+
 /** 定长比较，避免按字节数泄露 token 前缀。 */
 function tokenMatches(expected, given) {
   if (!expected) return false;
@@ -235,6 +250,8 @@ export class Journal {
     this.maxLines = maxLines;
     this.log = log || (() => {});
     this.lines = 0;
+    // id → 尚未有终态的 accepted 记录；自动压缩只保留这些，避免把待投条目清掉
+    this.accepted = new Map();
   }
 
   load() {
@@ -255,6 +272,12 @@ export class Journal {
       }
     }
     this.lines = records.length;
+    this.accepted = new Map();
+    for (const record of records) {
+      if (!record || !record.id) continue;
+      if (record.verdict === 'accepted') this.accepted.set(record.id, record);
+      else this.accepted.delete(record.id);
+    }
     return records;
   }
 
@@ -264,7 +287,11 @@ export class Journal {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
       fs.appendFileSync(this.file, JSON.stringify(record) + '\n', 'utf8');
       this.lines += 1;
-      if (this.lines > this.maxLines) this.compact();
+      if (record && record.id) {
+        if (record.verdict === 'accepted') this.accepted.set(record.id, record);
+        else this.accepted.delete(record.id);
+      }
+      if (this.lines > this.maxLines) this.compact([...this.accepted.values()]);
     } catch (error) {
       this.log(`journal write failed: ${(error && error.message) || error}`);
     }
@@ -279,6 +306,10 @@ export class Journal {
       fs.writeFileSync(tmp, body ? body + '\n' : '', 'utf8');
       fs.renameSync(tmp, this.file);
       this.lines = pending.length;
+      this.accepted = new Map();
+      for (const record of pending) {
+        if (record && record.id && record.verdict === 'accepted') this.accepted.set(record.id, record);
+      }
     } catch (error) {
       this.log(`journal compact failed: ${(error && error.message) || error}`);
     }
@@ -289,20 +320,32 @@ function readBody(req, limit) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
+    let settled = false;
     req.on('data', (chunk) => {
+      if (settled) return;
       // 按 UTF-8 字节算：中文 1 字 3 字节，不能用字符串长度
       size += chunk.length;
       if (size > limit) {
+        settled = true;
         const error = new Error('body too large');
         error.code = 'E_TOO_LARGE';
         reject(error);
-        req.pause();
+        // 排空剩余数据，让 413 响应能正常写回；直接 destroy 会让客户端只看到断连
+        req.resume();
         return;
       }
       chunks.push(chunk);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', reject);
+    req.on('end', () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks).toString('utf8'));
+    });
+    req.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
   });
 }
 
@@ -418,13 +461,14 @@ export function createBridge(ctx, options = {}) {
 
   function send(res, code, payload) {
     const body = JSON.stringify(payload);
-    res.writeHead(code, {
+    const headers = {
       'content-type': 'application/json; charset=utf-8',
       'content-length': Buffer.byteLength(body),
       'cache-control': 'no-store',
-      // 页面（127.0.0.1 上的 Web GUI）要跨端口读这个开关
-      'access-control-allow-origin': '*',
-    });
+    };
+    // 只反射回环来源的 Origin；不再无条件 *
+    if (res.__allowOrigin) headers['access-control-allow-origin'] = res.__allowOrigin;
+    res.writeHead(code, headers);
     res.end(body);
   }
 
@@ -551,7 +595,7 @@ export function createBridge(ctx, options = {}) {
   function replayPending() {
     if (!pending.length) return 0;
     let replayed = 0;
-    const remaining = [];
+    const queued = [];
     for (const id of pending) {
       const job = jobs.get(id);
       if (!job || job.status !== 'queued') continue;
@@ -568,14 +612,16 @@ export function createBridge(ctx, options = {}) {
         }
       }
       if (!ctx.agents.get(job.sessionId)) {
-        remaining.push(job);
+        // 会话暂时不在：排进后台泵（泵里有 MAX_BACKGROUND_WAIT_MS 过期失败逻辑）
+        queueWhenIdle(job);
+        queued.push(job);
         continue;
       }
       deliver(job);
       replayed += 1;
     }
-    pending = remaining;
-    journal.compact(remaining.map((job) => ({ ...journalRecord(job), verdict: 'accepted' })));
+    pending = [];
+    journal.compact(queued.map((job) => ({ ...journalRecord(job), verdict: 'accepted' })));
     if (replayed) log(`replayed ${replayed} pending deliveries after restart`);
     return replayed;
   }
@@ -585,10 +631,20 @@ export function createBridge(ctx, options = {}) {
     const url = new URL(req.url || '/', 'http://127.0.0.1');
     const tokenOk = tokenMatches(cfg.token, req.headers['x-inbox-token']);
 
+    // Host 必须是回环（挡 DNS rebinding）；Origin 只允许回环页面
+    const hostHeader = String(req.headers.host || '');
+    const host = hostHeader.startsWith('[')
+      ? hostHeader.slice(0, hostHeader.indexOf(']') + 1)
+      : hostHeader.split(':')[0];
+    if (!isLoopbackHostname(host)) return send(res, 403, { ok: false, error: 'forbidden host' });
+    const origin = req.headers.origin;
+    if (origin && !originAllowed(origin)) return send(res, 403, { ok: false, error: 'forbidden origin' });
+    res.__allowOrigin = origin && originAllowed(origin) ? origin : '';
+
     // 浏览器预检：只放行本机页面需要的那一组
     if (req.method === 'OPTIONS') {
       res.writeHead(204, {
-        'access-control-allow-origin': '*',
+        ...(res.__allowOrigin ? { 'access-control-allow-origin': res.__allowOrigin } : {}),
         'access-control-allow-methods': 'GET, POST, OPTIONS',
         'access-control-allow-headers': 'content-type, x-inbox-token',
         'access-control-max-age': '600',
@@ -598,8 +654,8 @@ export function createBridge(ctx, options = {}) {
       return;
     }
 
-    // 按会话的功能开关：**只在本机、故意不校验 token**——它只决定"某个会话能不能
-    // 发起跨会话换模型/发消息"，不读不写任何消息内容。页面拿不到桥的 token。
+    // 按会话的功能开关：**只允许回环页面、故意不校验 token**——它决定"某个会话能不能
+    // **被别的会话**换模型"（目标同意），不读不写任何消息内容。页面拿不到桥的 token。
     if (url.pathname === '/features/model-tools') {
       if (req.method === 'GET') {
         const sessionId = String(url.searchParams.get('sessionId') || '');
@@ -805,27 +861,26 @@ export function createBridge(ctx, options = {}) {
 
       // wait:true / onBusy=wait：先真的等空闲。等到了才投；等不到就排队，绝不硬塞。
       const wantsIdle = onBusy === 'wait' || Boolean(body.wait);
+      // 先登记（dedupe + journal）再 await：否则并发同 dedupeKey 的请求都能通过检查而双投
+      const job = newJob();
       if (busy && wantsIdle) {
         const waitMs = clampWait(body.maxWaitMs);
         const idle = await waitForIdle(agent, waitMs);
         if (!idle) {
-          const queuedJob = newJob();
-          queueWhenIdle(queuedJob);
-          log(`wait ${waitMs}ms 未空闲，转后台排队 ${queuedJob.id} → ${sessionId}`);
+          queueWhenIdle(job);
+          log(`wait ${waitMs}ms 未空闲，转后台排队 ${job.id} → ${sessionId}`);
           return send(res, 202, {
             ok: true,
             queued: true,
             delivered: false,
             waited: true,
-            id: queuedJob.id,
+            id: job.id,
             sessionId,
-            status: queuedJob.status,
+            status: job.status,
             note: `${waitMs}ms 内未空闲，已排队，空闲后自动投递；可用 GET /delivery/{id} 查`,
           });
         }
       }
-
-      const job = newJob();
       deliver(job);
       if (job.status === 'failed') {
         return send(res, 500, { ok: false, id: job.id, sessionId, status: job.status, error: job.error });

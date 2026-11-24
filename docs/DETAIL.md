@@ -1,16 +1,17 @@
 # 会话桥（dsh-session-bridge）
 
-一个包，两个入口、两条插件行：
+一个包，三个入口、三条插件行：
 
 | 入口 | 行 id | 作用 |
 |---|---|---|
 | `./inbox` | `inbox-bridge` | 本地 HTTP 收件箱：把文字投进活会话、按 `dedupeKey` 去重、可查投递结果 |
 | `./model`（也是包根 `.`） | `session-model` | 跨会话工具：列活会话/模型目录、给指定会话换模型、给另一个会话发消息；**客户端开关挂在这一行** |
+| `./media` | `media` | 生成工具：`media_models` / `image_generate` / `video_generate` / `audio_generate`（按 provider 适配 9 种后端） |
 
 外加一个**客户端半**（`client.js`）：在输入框的「模型 / 推理等级」菜单里加一行
 **「启用跨会话换模型」**（按会话生效，排在「启用智能体团队协作」下面）。
 
-两条插件行可以**分别开关**：只用收件箱就关掉 `session-model`，反之亦然。
+三条插件行可以**分别开关**：只用收件箱就关掉 `session-model`/`media`，反之亦然。
 客户端的那个开关只挂在 `session-model` 这个包根行上——关掉该行，开关和 4 个工具一起消失。
 
 ## 收件箱（inbox-bridge）
@@ -35,10 +36,7 @@ GET/POST /features/model-tools   按会话的换模型开关（本机、免 toke
 | `session_model_list` | 活会话、忙碌、当前模型、上一次请求实际用的模型（含"切换待生效"）；并标出每个会话"能否被换模型" |
 | `session_model_catalog` | 可调模型：provider / model / 上下文窗口 / 推理强度 / 输入模态 |
 | `session_model_set` | 给指定会话换模型，下一轮生效；跨会话默认通知对方；生成类模型默认拒绝 |
-| `session_message_send` | 给另一个活会话发一条用户消息（对方忙就排下一轮） |
-| `image_generate` | 调用生图接口生成图片，保存到 `~/.dsh/generated/`，返回文件路径与图片内容块 |
-| `video_generate` | 提交异步视频任务并轮询，下载 mp4 到 `~/.dsh/generated/` |
-| `audio_generate` | 语音合成（默认 `qwen-audio-3.0-tts-plus` / `longanlingxin`），下载 mp3 |
+| `session_message_send` | 给另一个活会话发一条用户消息（对方忙就排下一轮）；`hint` 可附工具提示 |
 
 ### 按会话开关
 
@@ -64,7 +62,7 @@ GET/POST /features/model-tools   按会话的换模型开关（本机、免 toke
 | kind | 能力 | 端点 | 默认模型 |
 |---|---|---|---|
 | `dashscope` | 图/视频/音频 | 阿里百炼系 | wan2.7-image / wan3.0-video / qwen-audio-3.0-tts-plus |
-| `openai` | 图/音频 | `/v1/images/generations`、`/v1/audio/speech` | gpt-image-1 / tts-1 |
+| `openai` | 图/音频 | `/v1/images/generations`、`/v1/audio/speech` | gpt-image-1 / gpt-4o-mini-tts |
 | `ark` | 图/视频 | `/api/v3/images/generations`、`/api/v3/contents/generations/tasks` | 需显式指定（Seedream/Seedance 版本多） |
 | `zhipu` | 图/视频 | `/api/paas/v4/images/generations`、`/api/paas/v4/videos/generations` | cogview-4 / cogvideox-3 |
 | `fal` | 图/视频 | `queue.fal.run/{model}` 队列 | 需给 fal 模型路径 |
@@ -96,27 +94,27 @@ providers:
 
 - HTTP 服务只绑定 `127.0.0.1`；写操作要 `X-Inbox-Token`。
 - `/features/model-tools` **故意不校验 token**：页面（另一个本地端口）拿不到桥的 token，
-  而这个端点只决定"某个会话能否发起换模型/发消息"，不读不写任何消息内容。
-  它的 CORS 是 `*`，只在本机可用。若你不接受这一点，可以停用 `inbox-bridge` 行，
-  换模型开关随之不可用（工具仍按最后一次状态生效）。
+  而这个端点只决定"某个会话能否**被别的会话**换模型"（目标同意），不读不写任何消息内容。
+- 服务校验 `Host` 必须是回环地址（挡 DNS rebinding）；`Origin` 只允许回环页面，
+  响应只反射回环 Origin（不再无条件 `*`），远程网页的跨域请求会被 403。
+  若你不接受这个免 token 端点，可以停用 `inbox-bridge` 行，换模型开关随之不可用
+  （工具仍按最后一次状态生效）。
 
 ## 安装
 
-```bash
-dsh plugin --profile <name> add @scope/dsh-session-bridge
-```
+通过 **Plugins 面板 / `plugin_manager`** 安装（包根作为 bundle 插入三条行）。
+`dsh plugin` CLI 子命令未在本文档版本核实，不建议照抄。
 
 本地目录：
 
-```bash
-dsh plugin --profile <name> add F:\Dsh_work\dsh-session-bridge
-```
+本地目录：在 Plugins 面板里选「从路径安装」，指到 `F:\Dsh_work\dsh-session-bridge`。
 
 ## 测试
 
 ```bash
 node test/inbox.test.js    # 34 条
-node test/model.test.js    # 19 条
+node test/model.test.js    # 26 条
+node test/media.test.js    # 28 条（含 9 家适配器与发现工具）
 ```
 
 本机没有独立 node 时，用 DSH 自带的 Electron：

@@ -14,6 +14,7 @@
  * 调用时 model 用 "provider/model"；extra 对象会合并进请求体（replicate 合并进 input）。
  * 未写 providers 时退回旧的单后端配置（provider/host/apiKeyEnv/apiKey），默认 dashscope。
  */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import https from 'node:https';
@@ -36,19 +37,20 @@ const DEFAULT_REPLICATE_HOST = 'https://api.replicate.com';
 
 const KINDS = ['openai', 'dashscope', 'ark', 'zhipu', 'fal', 'stability', 'elevenlabs', 'google', 'replicate'];
 
-// Node 的 fetch 不走系统代理；需要时用 CONNECT 隧道（http/https 代理）
-let ACTIVE_PROXY = '';
+// Node 的 fetch 不走系统代理；需要时用 CONNECT 隧道（http/https 代理）。
+// 代理放在 AsyncLocalStorage 里，避免并发任务互相覆盖（视频轮询会跨越几分钟）。
+const proxyStore = new AsyncLocalStorage();
 
 async function withProxy(entry, config, fn) {
-  ACTIVE_PROXY = String((entry && entry.proxy) || (config && config.proxy) || '');
-  try {
-    return await fn();
-  } finally {
-    ACTIVE_PROXY = '';
-  }
+  const proxy = String((entry && entry.proxy) || (config && config.proxy) || '');
+  return proxyStore.run(proxy, fn);
 }
 
-function proxyRequest(target, { method = 'GET', headers = {}, body }, proxyUrl, timeoutMs) {
+function activeProxy() {
+  return proxyStore.getStore() || '';
+}
+
+function proxyRequest(target, { method = 'GET', headers = {}, body }, proxyUrl, timeoutMs, redirects = 3) {
   return new Promise((resolve, reject) => {
     const url = new URL(target);
     const proxy = new URL(proxyUrl);
@@ -82,7 +84,18 @@ function proxyRequest(target, { method = 'GET', headers = {}, body }, proxyUrl, 
         (response) => {
           const chunks = [];
           response.on('data', (chunk) => chunks.push(chunk));
-          response.on('end', () => finish({ status: response.statusCode, headers: response.headers, buffer: Buffer.concat(chunks) }));
+          response.on('end', () => {
+            const status = response.statusCode;
+            const location = response.headers.location;
+            if (status >= 300 && status < 400 && location && redirects > 0) {
+              settled = true;
+              clearTimeout(timer);
+              proxyRequest(new URL(location, target).toString(), { method: 'GET', headers }, proxyUrl, timeoutMs, redirects - 1)
+                .then(resolve, reject);
+              return;
+            }
+            finish({ status, headers: response.headers, buffer: Buffer.concat(chunks) });
+          });
         },
       );
       request.on('error', fail);
@@ -97,7 +110,18 @@ function proxyRequest(target, { method = 'GET', headers = {}, body }, proxyUrl, 
         (response) => {
           const chunks = [];
           response.on('data', (chunk) => chunks.push(chunk));
-          response.on('end', () => finish({ status: response.statusCode, headers: response.headers, buffer: Buffer.concat(chunks) }));
+          response.on('end', () => {
+            const status = response.statusCode;
+            const location = response.headers.location;
+            if (status >= 300 && status < 400 && location && redirects > 0) {
+              settled = true;
+              clearTimeout(timer);
+              proxyRequest(new URL(location, target).toString(), { method: 'GET', headers }, proxyUrl, timeoutMs, redirects - 1)
+                .then(resolve, reject);
+              return;
+            }
+            finish({ status, headers: response.headers, buffer: Buffer.concat(chunks) });
+          });
         },
       );
       request.on('error', fail);
@@ -115,6 +139,7 @@ function proxyRequest(target, { method = 'GET', headers = {}, body }, proxyUrl, 
     });
     connect.on('connect', (response, socket) => {
       if (response.statusCode !== 200) {
+        socket.destroy();
         fail(new Error(`代理 CONNECT 失败 ${response.statusCode}`));
         return;
       }
@@ -141,6 +166,7 @@ function mediaKindOf(id, name) {
   if (/(image|seedream|cogview|dall-e|flux|imagen|stable-diffusion|sd3|ocr)/i.test(value)) return 'image';
   if (/(video|seedance|cogvideo|sora|veo)/i.test(value)) return 'video';
   if (/(audio|tts|asr|speech|transcri)/i.test(value)) return 'audio';
+  if (/(embedding|rerank|moderation)/i.test(value)) return 'chat';
   if (MEDIA_PATTERN.test(value)) return 'media';
   return 'chat';
 }
@@ -151,7 +177,7 @@ function detectKind(host) {
   if (value.includes('fal.run') || value.includes('fal.ai')) return 'fal';
   if (value.includes('stability.ai')) return 'stability';
   if (value.includes('elevenlabs.io')) return 'elevenlabs';
-  if (value.includes('generativelanguage.googleapis.com') || value.includes('googleapis.com')) return 'google';
+  if (value.includes('generativelanguage.googleapis.com')) return 'google';
   if (value.includes('replicate.com')) return 'replicate';
   if (value.includes('ark.cn-beijing.volces.com') || value.includes('bytepluses')) return 'ark';
   if (value.includes('dashscope') || value.includes('maas.aliyuncs.com') || value.includes('token-plan')) return 'dashscope';
@@ -179,7 +205,7 @@ function providerTable(config) {
     if (!entry || typeof entry !== 'object') continue;
     const host = String(entry.host || defaultHostOf(entry.kind)).replace(/\/+$/, '');
     const kind = entry.kind && KINDS.includes(entry.kind) ? entry.kind : detectKind(host);
-    table[id] = { kind, host, ...entry, host };
+    table[id] = { ...entry, kind, host };
   }
   if (Object.keys(table).length > 0) return table;
   const legacyKind = config && config.provider && KINDS.includes(config.provider)
@@ -222,7 +248,9 @@ function pickRoute(config, modelArg, modality) {
       }) || '';
     }
   }
-  if (providerId && !table[providerId] && table.__default !== undefined) providerId = '__default';
+  if (providerId && !table[providerId]) {
+    throw new Error(`provider "${providerId}" 不在 media.config.providers 里（已配置：${Object.keys(table).join(', ') || '(空)'}）`);
+  }
   const entry = providerId ? table[providerId] : undefined;
   if (!entry) {
     throw new Error(
@@ -255,8 +283,8 @@ async function resolveKey(ctx, entry) {
 }
 
 async function request(url, method, headers, body, timeoutMs) {
-  if (ACTIVE_PROXY) {
-    const result = await proxyRequest(url, { method, headers, body }, ACTIVE_PROXY, timeoutMs);
+  if (activeProxy()) {
+    const result = await proxyRequest(url, { method, headers, body }, activeProxy(), timeoutMs);
     if (result.status < 200 || result.status >= 300) {
       throw new Error(`HTTP ${result.status}: ${result.buffer.subarray(0, 500).toString('utf8')}`);
     }
@@ -289,8 +317,8 @@ async function getJson(url, headers, timeoutMs) {
 }
 
 async function download(url, file, timeoutMs, headers) {
-  if (ACTIVE_PROXY) {
-    const result = await proxyRequest(url, { method: 'GET', headers }, ACTIVE_PROXY, timeoutMs);
+  if (activeProxy()) {
+    const result = await proxyRequest(url, { method: 'GET', headers }, activeProxy(), timeoutMs);
     if (result.status < 200 || result.status >= 300) throw new Error(`下载失败 HTTP ${result.status}`);
     await ensureDir(join(file, '..'));
     await writeFile(file, result.buffer);
@@ -356,12 +384,14 @@ function mergeExtra(body, extra) {
 
 async function pollUntil(fn, done, deadlineMs, intervalMs = 5000) {
   const deadline = Date.now() + deadlineMs;
+  let last;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, intervalMs));
     const value = await fn();
+    last = value;
     if (done(value)) return value;
   }
-  throw new Error('轮询超时');
+  throw new Error(`轮询超时（最后状态：${JSON.stringify(last === undefined ? null : last).slice(0, 200)}）`);
 }
 
 async function imageBlock(ctx, bytes, mediaType) {
@@ -395,7 +425,9 @@ function textBlock(text) {
 
 async function image_openai(ctx, config, route, prompt, opts) {
   const key = await resolveKey(ctx, route.entry);
-  const body = mergeExtra({ model: route.model, prompt, n: 1, response_format: 'b64_json' }, opts.extra);
+  const body = mergeExtra({ model: route.model, prompt, n: 1 }, opts.extra);
+  // gpt-image-1 恒返 b64 且不接受 response_format（发了就是 400）；只有 dall-e 系需要显式要 b64
+  if (/dall-e/i.test(route.model) && body.response_format === undefined) body.response_format = 'b64_json';
   const data = await postJson(`${route.entry.host}/v1/images/generations`, { authorization: `Bearer ${key}` }, body, 150000);
   const item = (data.data || [])[0] || {};
   const dir = await ensureDir(config.outputDir || defaultOutputDir());
@@ -406,13 +438,26 @@ async function image_openai(ctx, config, route, prompt, opts) {
 
 async function image_dashscope(ctx, config, route, prompt, opts) {
   const key = await resolveKey(ctx, route.entry);
-  const body = mergeExtra({ model: route.model, messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }] }, opts.extra);
-  const data = await postJson(`${route.entry.host}/compatible-mode/v1/chat/completions`, { authorization: `Bearer ${key}` }, body, 150000);
+  // 官方 Token Plan 图像接口是原生 multimodal-generation（不是 compatible-mode 聊天）
+  const parameters = { ...(opts.extra || {}) };
+  const body = {
+    model: route.model,
+    input: { messages: [{ role: 'user', content: [{ text: prompt }] }] },
+    ...(Object.keys(parameters).length ? { parameters } : {}),
+  };
+  const data = await postJson(
+    `${route.entry.host}/api/v1/services/aigc/multimodal-generation/generation`,
+    { authorization: `Bearer ${key}` },
+    body,
+    150000,
+  );
   const content = (((data.output || {}).choices || [])[0] || {}).message?.content || [];
-  const part = (Array.isArray(content) ? content : []).find((item) => item && item.type === 'image' && item.image);
+  const part = (Array.isArray(content) ? content : []).find((item) => item && item.image);
   if (!part) throw new Error(`图片接口没有返回结果：${JSON.stringify(data).slice(0, 300)}`);
+  const image = typeof part.image === 'string' ? part.image : part.image && part.image.url;
+  if (!image) throw new Error(`图片接口没有可用 URL：${JSON.stringify(data).slice(0, 300)}`);
   const dir = await ensureDir(config.outputDir || defaultOutputDir());
-  return download(part.image, fileOf(dir, 'image', 'png'), 120000);
+  return download(image, fileOf(dir, 'image', 'png'), 120000);
 }
 
 async function image_ark(ctx, config, route, prompt, opts) {
@@ -439,11 +484,14 @@ async function image_zhipu(ctx, config, route, prompt, opts) {
 
 async function image_stability(ctx, config, route, prompt, opts) {
   const key = await resolveKey(ctx, route.entry);
+  if (activeProxy()) {
+    throw new Error('stability 的 multipart 请求暂不支持代理：请让它直连，或改用 openai 兼容的图片 provider');
+  }
   const form = new FormData();
   form.append('prompt', prompt);
   form.append('output_format', 'png');
   for (const [name, value] of Object.entries(opts.extra || {})) {
-    if (value !== undefined && value !== null) form.append(name, String(value));
+    if (value !== undefined && value !== null) form.append(name, typeof value === 'object' ? JSON.stringify(value) : String(value));
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 180000);
@@ -538,7 +586,7 @@ async function video_dashscope(ctx, config, route, prompt, opts) {
     () => getJson(`${route.entry.host}/api/v1/tasks/${encodeURIComponent(taskId)}`, { authorization: `Bearer ${key}` }, 30000),
     (value) => {
       const status = (value.output || {}).task_status;
-      if (status === 'FAILED' || status === 'CANCELED') throw new Error(`任务 ${status}：${JSON.stringify(value.output).slice(0, 400)}`);
+      if (status === 'FAILED' || status === 'CANCELED' || status === 'UNKNOWN') throw new Error(`任务 ${status}：${JSON.stringify(value.output).slice(0, 400)}`);
       return status === 'SUCCEEDED';
     },
     360000,
@@ -565,7 +613,7 @@ async function video_ark(ctx, config, route, prompt, opts) {
     () => getJson(`${route.entry.host}/api/v3/contents/generations/tasks/${encodeURIComponent(taskId)}`, { authorization: `Bearer ${key}` }, 30000),
     (value) => {
       const state = value.status || (value.output && value.output.task_status) || '';
-      if (/failed|canceled/i.test(state)) throw new Error(`任务失败：${JSON.stringify(value).slice(0, 400)}`);
+      if (/failed|cancell?ed|expired/i.test(state)) throw new Error(`任务失败：${JSON.stringify(value).slice(0, 400)}`);
       return /succeeded/i.test(state);
     },
     360000,
@@ -671,17 +719,20 @@ async function audio_elevenlabs(ctx, config, route, text, opts) {
   const key = await resolveKey(ctx, route.entry);
   const voice = String((opts && opts.voice) || route.entry.voice || config.voice || '21m00Tcm4TlvDq8ikWAM');
   const model = route.model || route.entry.audioModel || 'eleven_multilingual_v2';
-  const format = String((opts && opts.format) || 'mp3');
+  const requested = String((opts && opts.format) || 'mp3');
+  const formatMap = { mp3: 'mp3_44100_128', opus: 'opus_48000_128', pcm: 'pcm_16000', wav: 'pcm_16000' };
+  const outputFormat = formatMap[requested] || 'mp3_44100_128';
+  const ext = requested === 'wav' || requested === 'pcm' ? 'pcm' : requested;
   const body = mergeExtra({ text, model_id: model }, opts.extra);
   const { buffer } = await request(
-    `${route.entry.host}/v1/text-to-speech/${encodeURIComponent(voice)}`,
+    `${route.entry.host}/v1/text-to-speech/${encodeURIComponent(voice)}?output_format=${encodeURIComponent(outputFormat)}`,
     'POST',
     { 'xi-api-key': key },
     JSON.stringify(body),
     90000,
   );
   const dir = await ensureDir(config.outputDir || defaultOutputDir());
-  return { saved: await saveBytes(fileOf(dir, 'audio', format), buffer), format, voice };
+  return { saved: await saveBytes(fileOf(dir, 'audio', ext), buffer), format: ext, voice };
 }
 
 async function audio_google(ctx, config, route, text, opts) {
@@ -715,7 +766,8 @@ async function audio_google(ctx, config, route, text, opts) {
 }
 
 async function audio_replicate(ctx, config, route, text, opts) {
-  return replicateRun(ctx, config, route, mergeExtra({ text }, opts.extra), 'mp3', 240000);
+  const result = await replicateRun(ctx, config, route, mergeExtra({ text }, opts.extra), 'mp3', 240000);
+  return { saved: result.saved, format: 'mp3', voice: '' };
 }
 
 /* ------------------------------ 通用 runner ------------------------------ */
@@ -751,11 +803,10 @@ async function replicateRun(ctx, config, route, input, ext, timeoutMs) {
   const host = route.entry.host.replace(/\/+$/, '');
   const modelRef = route.model || '';
   const body = { input };
+  // 官方要求的字段是 version（它自己也接受 owner/name）；没有 model 字段
   if (modelRef.includes(':')) {
     const idx = modelRef.lastIndexOf(':');
     body.version = modelRef.slice(idx + 1);
-  } else if (modelRef.includes('/')) {
-    body.model = modelRef;
   } else if (modelRef) {
     body.version = modelRef;
   } else {
@@ -767,13 +818,14 @@ async function replicateRun(ctx, config, route, input, ext, timeoutMs) {
   const final = await pollUntil(
     () => getJson(`${host}/v1/predictions/${encodeURIComponent(id)}`, { authorization: `Token ${key}` }, 30000),
     (value) => {
-      if (value.status === 'failed' || value.status === 'canceled') throw new Error(`任务失败：${JSON.stringify(value).slice(0, 400)}`);
+      if (value.status === 'failed' || value.status === 'canceled' || value.status === 'aborted') throw new Error(`任务失败：${JSON.stringify(value).slice(0, 400)}`);
       return value.status === 'succeeded';
     },
     timeoutMs,
   );
   const output = final.output;
-  const url = Array.isArray(output) ? output[0] : typeof output === 'string' ? output : output && (output.url || output.video || output.image);
+  const first = Array.isArray(output) ? output[0] : output;
+  const url = typeof first === 'string' ? first : first && (first.url || first.video || first.image);
   if (!url) throw new Error(`任务完成但没有输出 URL：${JSON.stringify(final).slice(0, 300)}`);
   const dir = await ensureDir(config.outputDir || defaultOutputDir());
   return { saved: await download(url, fileOf(dir, ext === 'mp4' ? 'video' : ext === 'mp3' ? 'audio' : 'image', ext), 180000), taskId: id };
@@ -795,7 +847,7 @@ const ADAPTERS = {
 
 const DEFAULT_IMAGE_MODEL = { openai: 'gpt-image-1', dashscope: 'wan2.7-image', zhipu: 'cogview-4', google: 'imagen-4.0-generate-001' };
 const DEFAULT_VIDEO_MODEL = { dashscope: 'wan3.0-video', zhipu: 'cogvideox-3', google: 'veo-3.1-generate-preview' };
-const DEFAULT_AUDIO_MODEL = { openai: 'tts-1', dashscope: 'qwen-audio-3.0-tts-plus', elevenlabs: 'eleven_multilingual_v2', google: 'gemini-2.5-flash-preview-tts' };
+const DEFAULT_AUDIO_MODEL = { openai: 'gpt-4o-mini-tts', dashscope: 'qwen-audio-3.0-tts-plus', elevenlabs: 'eleven_multilingual_v2', google: 'gemini-2.5-flash-preview-tts' };
 
 export function createMediaTools(ctx, options = {}) {
   const config = options || {};
@@ -892,7 +944,8 @@ export function createMediaTools(ctx, options = {}) {
         throw new Error(`provider "${route.providerId}"（kind=${route.entry.kind}）不支持图片生成`);
       }
       route.model = route.model || route.entry.imageModel || config.imageModel || DEFAULT_IMAGE_MODEL[route.entry.kind];
-      if (!route.model) throw new Error(`provider "${route.providerId}" 需要 image model`);
+      // stability 的 core 端点不需要 model，其它 kind 必须给
+      if (!route.model && route.entry.kind !== 'stability') throw new Error(`provider "${route.providerId}" 需要 image model`);
       const saved = await withProxy(route.entry, config, () => run('image', route, [prompt, { extra: args.extra }]));
       const bytes = await readFile(saved.file);
       const ext = saved.file.split('.').pop();
@@ -967,7 +1020,7 @@ export function createMediaTools(ctx, options = {}) {
         return blocks;
       },
     },
-    timeoutMs: 180000,
+    timeoutMs: 300000,
     async execute(args) {
       const text = String((args && args.text) || '').trim();
       if (!text) throw new Error('text 必填');

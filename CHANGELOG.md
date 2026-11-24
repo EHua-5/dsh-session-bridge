@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.1 — 2026-11-24（审查修复）
+
+- media 适配器修正：dashscope 图片改原生 multimodal-generation 端点；openai 图片不再对
+  gpt-image-1 发 `response_format`；replicate 官方模型走 `version`；stability 不再要求 model；
+  ark 终态补 cancelled/expired；elevenlabs 传 `output_format`；replicate 终态补 aborted；
+  openai 音频默认迁 `gpt-4o-mini-tts`；音频工具超时与轮询上限对齐。
+- media 代理改用 AsyncLocalStorage（并发不串代理）；proxyRequest 支持 3xx 跟随；
+  CONNECT 失败销毁 socket；stability 代理下明确报错。
+- provider 路由：kind 消毒顺序修正、未知 provider 前缀报错、google 只认 generativelanguage、
+  embedding/rerank/moderation 不再列为可生成模型。
+- inbox：journal 自动压缩保留未终态条目；补投对暂不活跃会话进后台泵；wait 路径先登记再 await；
+  Host/Origin 只允许回环，CORS 反射回环 Origin；超限请求排空而不是断连。
+- 客户端：缓存 5s TTL + stale-while-revalidate；`dsh.client.inject` 补 primitives。
+- 工具输出：audio_replicate 不再产生 undefined 字段。
+- 文档：三条行/媒体工具/测试数/安装方式/`/features` 语义与 CORS 说明同步更新。
+
 ## 0.8.0 — 2026-11-23
 
 - media 新增 6 家适配器：zhipu（CogView/CogVideoX）、fal（队列）、stability（multipart）、
