@@ -749,7 +749,10 @@ export function createMediaTools(ctx, options = {}) {
 
   const imageTool = {
     name: 'image_generate',
-    description: `用生图模型生成一张图片，保存到本地并返回文件路径（GUI 里会直接显示图片）。${routeHint}`,
+    description: `用生图模型生成一张图片，保存到本地并返回文件路径（GUI 里会直接显示图片）。` +
+      '如果当前会话模型不支持图片输入，不要用 read_image 去验证生成结果（会报 "does not declare image input"），' +
+      '图片本身会直接显示。' +
+      routeHint,
     parameters: {
       type: 'object',
       properties: {
