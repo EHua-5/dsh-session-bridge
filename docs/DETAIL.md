@@ -57,30 +57,40 @@ GET/POST /features/model-tools   按会话的换模型开关（本机、免 toke
 
 ## 生成类工具（media 行）
 
-工具：`media_models`（列出可调用的生成模型）、`image_generate`、`video_generate`、`audio_generate`。
+工具：`media_models`（发现可调用的生成模型）、`image_generate`、`video_generate`、`audio_generate`。
 
-按 provider 路由到各厂商原生接口（`media.config.providers`，键为 llm provider id）：
+`media.config.providers`（键为 llm provider id）决定调用哪个厂商的原生接口：
+
+| kind | 能力 | 端点 | 默认模型 |
+|---|---|---|---|
+| `dashscope` | 图/视频/音频 | 阿里百炼系 | wan2.7-image / wan3.0-video / qwen-audio-3.0-tts-plus |
+| `openai` | 图/音频 | `/v1/images/generations`、`/v1/audio/speech` | gpt-image-1 / tts-1 |
+| `ark` | 图/视频 | `/api/v3/images/generations`、`/api/v3/contents/generations/tasks` | 需显式指定（Seedream/Seedance 版本多） |
+| `zhipu` | 图/视频 | `/api/paas/v4/images/generations`、`/api/paas/v4/videos/generations` | cogview-4 / cogvideox-3 |
+| `fal` | 图/视频 | `queue.fal.run/{model}` 队列 | 需给 fal 模型路径 |
+| `stability` | 图 | `/v2beta/stable-image/generate/core`（multipart） | 无需 model |
+| `elevenlabs` | 音频 | `/v1/text-to-speech/{voice}` | eleven_multilingual_v2 |
+| `google` | 图/视频/音频 | Imagen `:predict`、Veo `:predictLongRunning`、Gemini TTS | imagen-4.0-generate-001 / veo-3.1-generate-preview / gemini-2.5-flash-preview-tts |
+| `replicate` | 图/视频/音频 | `/v1/predictions` + 轮询 | 需 `owner/name` 或 `owner/name:version` |
+
+配置示例：
 
 ```yaml
 providers:
-  bailian-tpp:
-    kind: dashscope              # 阿里系：图 chat/completions、视频异步任务、音频 SpeechSynthesizer
-    host: https://token-plan.cn-beijing.maas.aliyuncs.com
-    apiKeyEnv: BAILIAN_TPP_API_KEY
-  ark:
-    kind: ark                    # 火山方舟：图 /api/v3/images/generations、视频 /api/v3/contents/generations/tasks
-    host: https://ark.cn-beijing.volces.com
-    apiKeyEnv: ARK_API_KEY
-  openai:
-    kind: openai                 # OpenAI 兼容：图 /v1/images/generations、音频 /v1/audio/speech
-    host: https://api.openai.com
-    apiKeyEnv: OPENAI_API_KEY
+  ark:     { kind: ark,        host: https://ark.cn-beijing.volces.com, apiKeyEnv: ARK_API_KEY }
+  google:  { kind: google,     host: https://generativelanguage.googleapis.com, apiKeyEnv: GEMINI_API_KEY }
+  fal:     { kind: fal,        host: https://queue.fal.run, apiKeyEnv: FAL_KEY }
+  replicate:{ kind: replicate, host: https://api.replicate.com, apiKeyEnv: REPLICATE_API_TOKEN }
+  zhipu:   { kind: zhipu,      host: https://open.bigmodel.cn, apiKeyEnv: ZHIPU_API_KEY }
+  stability:{kind: stability,  host: https://api.stability.ai, apiKeyEnv: STABILITY_API_KEY }
+  eleven:  { kind: elevenlabs, host: https://api.elevenlabs.io, apiKeyEnv: ELEVENLABS_API_KEY, voice: <voice_id> }
 ```
 
-- 调用时 `model` 传 `provider/model`（如 `ark/doubao-seedream-5-0`、`openai/gpt-image-1`）；省略走 `defaultProvider` 或唯一配置项。
+- 调用时 `model` 传 `provider/model`；省略走 `defaultProvider` 或唯一配置项。
+- `extra` 参数原样合并进请求体（replicate 合并进 `input`），用于模型私有字段。
 - 没有 `providers` 表时退回旧的单后端配置（`provider`/`host`/`apiKeyEnv`/`apiKey`），默认 dashscope。
-- 产物默认存 `~/.dsh/generated/`（`config.outputDir` 可改）；图片经附件服务转 image block。
-- `media_models` 用 `ctx.llm.listProviders()/listModels()` 发现所有多模态模型，并标出哪些 provider 已配置生成端点。
+- 产物默认存 `~/.dsh/generated/`；图片经附件服务转 image block。
+- 适配器按官方文档实现；除 dashscope/openai/ark 外未逐一真机验证，首次调用如报错按错误信息微调。
 
 ## 安全说明
 

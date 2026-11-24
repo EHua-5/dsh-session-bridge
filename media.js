@@ -1,34 +1,42 @@
 /**
- * 生成类工具：图片 / 视频 / 音频，支持按 provider 路由到不同厂商的原生接口。
+ * 生成类工具：图片 / 视频 / 音频，按 provider 路由到各厂商原生接口。
  *
- * config.providers 是"可以调用生成能力的 provider 表"（键是 llm provider id）：
+ * config.providers（键为 llm provider id）：
  *   providers:
- *     ark:        { kind: ark,       host: https://ark.cn-beijing.volces.com, apiKeyEnv: ARK_API_KEY }
- *     openai:     { kind: openai,    host: https://api.openai.com,            apiKeyEnv: OPENAI_API_KEY }
- *     bailian-tpp:{ kind: dashscope, host: https://token-plan.cn-beijing.maas.aliyuncs.com, apiKeyEnv: BAILIAN_TPP_API_KEY }
- * 没写 providers 时退回旧的单后端配置（provider/host/apiKeyEnv/apiKey），默认 dashscope。
+ *     zhipu:   { kind: zhipu,   host: https://open.bigmodel.cn,        apiKeyEnv: ZHIPU_API_KEY }
+ *     fal:     { kind: fal,     host: https://queue.fal.run,           apiKeyEnv: FAL_KEY }
+ *     stability:{kind: stability,host: https://api.stability.ai,       apiKeyEnv: STABILITY_API_KEY }
+ *     eleven:  { kind: elevenlabs,host: https://api.elevenlabs.io,     apiKeyEnv: ELEVENLABS_API_KEY, voice: <voice_id> }
+ *     google:  { kind: google,  host: https://generativelanguage.googleapis.com, apiKeyEnv: GEMINI_API_KEY }
+ *     replicate:{kind: replicate,host: https://api.replicate.com,      apiKeyEnv: REPLICATE_API_TOKEN }
+ *     openai / dashscope / ark 见 document。
  *
- * 工具调用时 model 用 "provider/model"（如 ark/doubao-seedream-5-0-…）或省略走 defaultProvider。
- *
- * 适配器：
- *  - dashscope：图 chat/completions；视频异步任务；音频 SpeechSynthesizer
- *  - openai：图 /v1/images/generations（b64_json，回退 url）；音频 /v1/audio/speech；视频不支持
- *  - ark：图 /api/v3/images/generations；视频 /api/v3/contents/generations/tasks + 轮询；音频不支持
+ * 调用时 model 用 "provider/model"；extra 对象会合并进请求体（replicate 合并进 input）。
+ * 未写 providers 时退回旧的单后端配置（provider/host/apiKeyEnv/apiKey），默认 dashscope。
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-const MEDIA_PATTERN = /(image|video|audio|tts|asr|speech|transcri|seedream|seedance|sora|dall-e|flux|imagen|veo|embedding|rerank|moderation|ocr)/i;
+const MEDIA_PATTERN =
+  /(image|video|audio|tts|asr|speech|transcri|seedream|seedance|sora|dall-e|flux|imagen|veo|cogview|cogvideo|stable-diffusion|sd3|embedding|rerank|moderation|ocr)/i;
 
 const DEFAULT_DASHSCOPE_HOST = 'https://token-plan.cn-beijing.maas.aliyuncs.com';
 const DEFAULT_OPENAI_HOST = 'https://api.openai.com';
 const DEFAULT_ARK_HOST = 'https://ark.cn-beijing.volces.com';
+const DEFAULT_ZHIPU_HOST = 'https://open.bigmodel.cn';
+const DEFAULT_FAL_HOST = 'https://queue.fal.run';
+const DEFAULT_STABILITY_HOST = 'https://api.stability.ai';
+const DEFAULT_ELEVEN_HOST = 'https://api.elevenlabs.io';
+const DEFAULT_GOOGLE_HOST = 'https://generativelanguage.googleapis.com';
+const DEFAULT_REPLICATE_HOST = 'https://api.replicate.com';
+
+const KINDS = ['openai', 'dashscope', 'ark', 'zhipu', 'fal', 'stability', 'elevenlabs', 'google', 'replicate'];
 
 function mediaKindOf(id, name) {
   const value = `${id || ''} ${name || ''}`;
-  if (/(image|seedream|dall-e|flux|imagen|ocr)/i.test(value)) return 'image';
-  if (/(video|seedance|sora|veo)/i.test(value)) return 'video';
+  if (/(image|seedream|cogview|dall-e|flux|imagen|stable-diffusion|sd3|ocr)/i.test(value)) return 'image';
+  if (/(video|seedance|cogvideo|sora|veo)/i.test(value)) return 'video';
   if (/(audio|tts|asr|speech|transcri)/i.test(value)) return 'audio';
   if (MEDIA_PATTERN.test(value)) return 'media';
   return 'chat';
@@ -36,30 +44,42 @@ function mediaKindOf(id, name) {
 
 function detectKind(host) {
   const value = String(host || '').toLowerCase();
+  if (value.includes('open.bigmodel.cn')) return 'zhipu';
+  if (value.includes('fal.run') || value.includes('fal.ai')) return 'fal';
+  if (value.includes('stability.ai')) return 'stability';
+  if (value.includes('elevenlabs.io')) return 'elevenlabs';
+  if (value.includes('generativelanguage.googleapis.com') || value.includes('googleapis.com')) return 'google';
+  if (value.includes('replicate.com')) return 'replicate';
   if (value.includes('ark.cn-beijing.volces.com') || value.includes('bytepluses')) return 'ark';
   if (value.includes('dashscope') || value.includes('maas.aliyuncs.com') || value.includes('token-plan')) return 'dashscope';
   return 'openai';
 }
 
 function defaultHostOf(kind) {
-  if (kind === 'ark') return DEFAULT_ARK_HOST;
-  if (kind === 'openai') return DEFAULT_OPENAI_HOST;
-  return DEFAULT_DASHSCOPE_HOST;
+  return {
+    ark: DEFAULT_ARK_HOST,
+    zhipu: DEFAULT_ZHIPU_HOST,
+    fal: DEFAULT_FAL_HOST,
+    stability: DEFAULT_STABILITY_HOST,
+    elevenlabs: DEFAULT_ELEVEN_HOST,
+    google: DEFAULT_GOOGLE_HOST,
+    replicate: DEFAULT_REPLICATE_HOST,
+    openai: DEFAULT_OPENAI_HOST,
+    dashscope: DEFAULT_DASHSCOPE_HOST,
+  }[kind] || DEFAULT_OPENAI_HOST;
 }
 
-/** 归一化出的 provider 表：kind/host/apiKeyEnv。没有 providers 时用旧的单后端配置。 */
 function providerTable(config) {
   const table = {};
   const source = (config && config.providers) || {};
   for (const [id, entry] of Object.entries(source)) {
     if (!entry || typeof entry !== 'object') continue;
     const host = String(entry.host || defaultHostOf(entry.kind)).replace(/\/+$/, '');
-    const kind = entry.kind && ['ark', 'openai', 'dashscope'].includes(entry.kind) ? entry.kind : detectKind(host);
-    table[id] = { kind, host, apiKeyEnv: entry.apiKeyEnv, apiKey: entry.apiKey, imageModel: entry.imageModel, videoModel: entry.videoModel, audioModel: entry.audioModel, voice: entry.voice };
+    const kind = entry.kind && KINDS.includes(entry.kind) ? entry.kind : detectKind(host);
+    table[id] = { kind, host, ...entry, host };
   }
   if (Object.keys(table).length > 0) return table;
-  // 旧配置兼容：provider/host/apiKeyEnv/apiKey；没写 host 时保持旧的 dashscope 默认
-  const legacyKind = config && config.provider && ['ark', 'openai', 'dashscope'].includes(config.provider)
+  const legacyKind = config && config.provider && KINDS.includes(config.provider)
     ? config.provider
     : (config && config.host ? detectKind(config.host) : 'dashscope');
   const legacyId = legacyKind === 'dashscope' && !(config && config.provider) ? '__default' : legacyKind;
@@ -103,23 +123,6 @@ function pickRoute(config, modelArg) {
   return { providerId: providerId || '__default', entry, model: parsed.model };
 }
 
-function defaultImageModel(kind) {
-  if (kind === 'openai') return 'gpt-image-1';
-  if (kind === 'dashscope') return 'wan2.7-image';
-  return undefined; // ark 的 seedream 版本号多，必须显式指定
-}
-
-function defaultVideoModel(kind) {
-  if (kind === 'dashscope') return 'wan3.0-video';
-  return undefined; // ark 的 seedance 版本号多，必须显式指定
-}
-
-function defaultAudioModel(kind) {
-  if (kind === 'openai') return 'tts-1';
-  if (kind === 'dashscope') return 'qwen-audio-3.0-tts-plus';
-  return undefined;
-}
-
 function defaultOutputDir() {
   return join(homedir(), '.dsh', 'generated');
 }
@@ -145,16 +148,10 @@ async function request(url, method, headers, body, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, {
-      method,
-      headers: { 'content-type': 'application/json', ...headers },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: controller.signal,
-    });
+    const response = await fetch(url, { method, headers, body, signal: controller.signal });
     const buffer = new Uint8Array(await response.arrayBuffer());
     if (!response.ok) {
-      const text = new TextDecoder().decode(buffer.slice(0, 500));
-      throw new Error(`HTTP ${response.status}: ${text}`);
+      throw new Error(`HTTP ${response.status}: ${new TextDecoder().decode(buffer.slice(0, 500))}`);
     }
     return { buffer, contentType: response.headers.get('content-type') || '' };
   } finally {
@@ -163,7 +160,7 @@ async function request(url, method, headers, body, timeoutMs) {
 }
 
 async function postJson(url, headers, body, timeoutMs) {
-  const { buffer } = await request(url, 'POST', headers, body, timeoutMs);
+  const { buffer } = await request(url, 'POST', { 'content-type': 'application/json', ...headers }, JSON.stringify(body), timeoutMs);
   const text = new TextDecoder().decode(buffer);
   return text ? JSON.parse(text) : {};
 }
@@ -174,11 +171,11 @@ async function getJson(url, headers, timeoutMs) {
   return text ? JSON.parse(text) : {};
 }
 
-async function download(url, file, timeoutMs) {
+async function download(url, file, timeoutMs, headers) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await fetch(url, { headers, signal: controller.signal });
     if (!response.ok) throw new Error(`下载失败 HTTP ${response.status}`);
     const bytes = new Uint8Array(await response.arrayBuffer());
     await ensureDir(join(file, '..'));
@@ -209,6 +206,21 @@ function decodeBase64(value) {
   return Buffer.from(String(value).replace(/^data:[^,]+,/, ''), 'base64');
 }
 
+function mergeExtra(body, extra) {
+  if (!extra || typeof extra !== 'object') return body;
+  return { ...body, ...extra };
+}
+
+async function pollUntil(fn, done, deadlineMs, intervalMs = 5000) {
+  const deadline = Date.now() + deadlineMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, intervalMs));
+    const value = await fn();
+    if (done(value)) return value;
+  }
+  throw new Error('轮询超时');
+}
+
 async function imageBlock(ctx, bytes, mediaType) {
   const attachments = ctx && ctx.attachments;
   if (!attachments || typeof attachments.saveImages !== 'function') return null;
@@ -236,140 +248,397 @@ function textBlock(text) {
   return { type: 'text', text };
 }
 
-async function makeImage(ctx, config, route, prompt, opts) {
-  const { entry, model } = route;
+/* ------------------------------ 图片 ------------------------------ */
+
+async function image_openai(ctx, config, route, prompt, opts) {
+  const key = await resolveKey(ctx, route.entry);
+  const body = mergeExtra({ model: route.model, prompt, n: 1, response_format: 'b64_json' }, opts.extra);
+  const data = await postJson(`${route.entry.host}/v1/images/generations`, { authorization: `Bearer ${key}` }, body, 150000);
+  const item = (data.data || [])[0] || {};
   const dir = await ensureDir(config.outputDir || defaultOutputDir());
-  const key = await resolveKey(ctx, entry);
-  const auth = { authorization: `Bearer ${key}` };
-  if (!model) throw new Error('image_generate 需要 model（如 provider/model）');
+  if (item.b64_json) return saveBytes(fileOf(dir, 'image', 'png'), decodeBase64(item.b64_json));
+  if (item.url) return download(item.url, fileOf(dir, 'image', 'png'), 120000);
+  throw new Error(`图片接口没有返回结果：${JSON.stringify(data).slice(0, 300)}`);
+}
 
-  if (entry.kind === 'openai') {
-    const body = { model, prompt, n: 1, response_format: 'b64_json' };
-    const data = await postJson(`${entry.host}/v1/images/generations`, auth, body, 150000);
-    const item = (data.data || [])[0] || {};
-    if (item.b64_json) return saveBytes(fileOf(dir, 'image', 'png'), decodeBase64(item.b64_json));
-    if (item.url) return download(item.url, fileOf(dir, 'image', 'png'), 120000);
-    throw new Error(`图片接口没有返回结果：${JSON.stringify(data).slice(0, 300)}`);
-  }
-
-  if (entry.kind === 'ark') {
-    const body = { model, prompt };
-    if (opts && opts.size) body.size = String(opts.size);
-    const data = await postJson(`${entry.host}/api/v3/images/generations`, auth, body, 180000);
-    const item = (data.data || [])[0] || {};
-    if (item.b64_json) return saveBytes(fileOf(dir, 'image', 'png'), decodeBase64(item.b64_json));
-    if (item.url) return download(item.url, fileOf(dir, 'image', 'png'), 120000);
-    const content = (data.output && data.output.choices && data.output.choices[0] && data.output.choices[0].message && data.output.choices[0].message.content) || [];
-    const imagePart = (Array.isArray(content) ? content : []).find((part) => part && part.image);
-    if (imagePart) return download(imagePart.image, fileOf(dir, 'image', 'png'), 120000);
-    throw new Error(`图片接口没有返回结果：${JSON.stringify(data).slice(0, 300)}`);
-  }
-
-  // dashscope
-  const body = { model, messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }] };
-  const data = await postJson(`${entry.host}/compatible-mode/v1/chat/completions`, auth, body, 150000);
+async function image_dashscope(ctx, config, route, prompt, opts) {
+  const key = await resolveKey(ctx, route.entry);
+  const body = mergeExtra({ model: route.model, messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }] }, opts.extra);
+  const data = await postJson(`${route.entry.host}/compatible-mode/v1/chat/completions`, { authorization: `Bearer ${key}` }, body, 150000);
   const content = (((data.output || {}).choices || [])[0] || {}).message?.content || [];
   const part = (Array.isArray(content) ? content : []).find((item) => item && item.type === 'image' && item.image);
   if (!part) throw new Error(`图片接口没有返回结果：${JSON.stringify(data).slice(0, 300)}`);
+  const dir = await ensureDir(config.outputDir || defaultOutputDir());
   return download(part.image, fileOf(dir, 'image', 'png'), 120000);
 }
 
-async function makeVideo(ctx, config, route, prompt, opts) {
-  const { entry, model } = route;
+async function image_ark(ctx, config, route, prompt, opts) {
+  const key = await resolveKey(ctx, route.entry);
+  const body = mergeExtra({ model: route.model, prompt }, opts.extra);
+  const data = await postJson(`${route.entry.host}/api/v3/images/generations`, { authorization: `Bearer ${key}` }, body, 180000);
   const dir = await ensureDir(config.outputDir || defaultOutputDir());
-  const key = await resolveKey(ctx, entry);
-  const auth = { authorization: `Bearer ${key}` };
-  if (entry.kind === 'openai') throw new Error(`OpenAI 没有标准的视频生成接口（provider=${route.providerId}）`);
-  if (!model) throw new Error('video_generate 需要 model（如 provider/model）');
+  const item = (data.data || [])[0] || {};
+  if (item.b64_json) return saveBytes(fileOf(dir, 'image', 'png'), decodeBase64(item.b64_json));
+  if (item.url) return download(item.url, fileOf(dir, 'image', 'png'), 120000);
+  throw new Error(`图片接口没有返回结果：${JSON.stringify(data).slice(0, 300)}`);
+}
 
-  if (entry.kind === 'ark') {
-    const content = [{ type: 'text', text: prompt }];
-    if (opts && opts.imageUrl) content.unshift({ type: 'image_url', image_url: { url: String(opts.imageUrl) } });
-    const submit = await postJson(`${entry.host}/api/v3/contents/generations/tasks`, auth, { model, content }, 60000);
-    const taskId = submit.id || (submit.output && submit.output.task_id);
-    if (!taskId) throw new Error(`提交失败：${JSON.stringify(submit).slice(0, 300)}`);
-    const deadline = Date.now() + 360000;
-    let videoUrl = '';
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 5000));
-      const status = await getJson(`${entry.host}/api/v3/contents/generations/tasks/${encodeURIComponent(taskId)}`, auth, 30000);
-      const state = status.status || (status.output && status.output.task_status) || '';
-      if (/succeeded|SUCCEEDED/i.test(state)) {
-        videoUrl = (status.content && status.content.video_url) || status.video_url || (status.output && status.output.video_url) || '';
-        break;
-      }
-      if (/failed|FAILED|canceled|CANCELED/i.test(state)) throw new Error(`任务失败：${JSON.stringify(status).slice(0, 400)}`);
-    }
-    if (!videoUrl) throw new Error(`任务超时或没有 video_url（task=${taskId}）`);
-    return { saved: await download(videoUrl, fileOf(dir, 'video', 'mp4'), 180000), taskId };
+async function image_zhipu(ctx, config, route, prompt, opts) {
+  const key = await resolveKey(ctx, route.entry);
+  const body = mergeExtra({ model: route.model, prompt }, opts.extra);
+  const data = await postJson(`${route.entry.host}/api/paas/v4/images/generations`, { authorization: `Bearer ${key}` }, body, 180000);
+  const dir = await ensureDir(config.outputDir || defaultOutputDir());
+  const item = (data.data || [])[0] || {};
+  if (item.url) return download(item.url, fileOf(dir, 'image', 'png'), 120000);
+  if (item.b64_json) return saveBytes(fileOf(dir, 'image', 'png'), decodeBase64(item.b64_json));
+  throw new Error(`图片接口没有返回结果：${JSON.stringify(data).slice(0, 300)}`);
+}
+
+async function image_stability(ctx, config, route, prompt, opts) {
+  const key = await resolveKey(ctx, route.entry);
+  const form = new FormData();
+  form.append('prompt', prompt);
+  form.append('output_format', 'png');
+  for (const [name, value] of Object.entries(opts.extra || {})) {
+    if (value !== undefined && value !== null) form.append(name, String(value));
   }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 180000);
+  try {
+    const response = await fetch(`${route.entry.host}/v2beta/stable-image/generate/core`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${key}`, accept: 'image/*' },
+      body: form,
+      signal: controller.signal,
+    });
+    const buffer = new Uint8Array(await response.arrayBuffer());
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${new TextDecoder().decode(buffer.slice(0, 400))}`);
+    const dir = await ensureDir(config.outputDir || defaultOutputDir());
+    return saveBytes(fileOf(dir, 'image', 'png'), buffer);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
-  // dashscope 异步任务
+async function image_fal(ctx, config, route, prompt, opts) {
+  const model = route.model || route.entry.imageModel;
+  if (!model) throw new Error('fal 图片需要在 config/route 里给 model（fal 模型路径，如 fal-ai/flux/schnell）');
+  const result = await falRun(ctx, config, route, model, mergeExtra({ prompt }, opts.extra), (data) => {
+    const first = (data.images || [])[0] || {};
+    return first.url || data.image?.url || '';
+  }, 'png', 180000);
+  return result.saved;
+}
+
+async function image_google(ctx, config, route, prompt, opts) {
+  const key = await resolveKey(ctx, route.entry);
+  const model = route.model || route.entry.imageModel;
+  if (!model) throw new Error('google 图片需要 model（如 imagen-4.0-generate-001）');
+  const body = mergeExtra({ instances: [{ prompt }], parameters: { sampleCount: 1 } }, opts.extra);
+  const data = await postJson(
+    `${route.entry.host}/v1beta/models/${encodeURIComponent(model)}:predict?key=${encodeURIComponent(key)}`,
+    {},
+    body,
+    180000,
+  );
+  const item = (data.predictions || [])[0] || {};
+  const dir = await ensureDir(config.outputDir || defaultOutputDir());
+  if (item.bytesBase64Encoded) return saveBytes(fileOf(dir, 'image', 'png'), decodeBase64(item.bytesBase64Encoded));
+  if (item.uri) return download(item.uri, fileOf(dir, 'image', 'png'), 120000, { 'x-goog-api-key': key });
+  throw new Error(`图片接口没有返回结果：${JSON.stringify(data).slice(0, 300)}`);
+}
+
+async function image_replicate(ctx, config, route, prompt, opts) {
+  const result = await replicateRun(ctx, config, route, mergeExtra({ prompt }, opts.extra), 'png', 240000);
+  return result.saved;
+}
+
+/* ------------------------------ 视频 ------------------------------ */
+
+async function video_dashscope(ctx, config, route, prompt, opts) {
+  const key = await resolveKey(ctx, route.entry);
   const duration = Number((opts && opts.duration) || 3);
   const resolution = String((opts && opts.resolution) || '480P');
   const ratio = String((opts && opts.ratio) || 'adaptive');
   const input = { prompt };
   if (opts && opts.imageUrl) input.media = [{ type: 'first_frame', url: String(opts.imageUrl) }];
   const submit = await postJson(
-    `${entry.host}/api/v1/services/aigc/video-generation/video-synthesis`,
+    `${route.entry.host}/api/v1/services/aigc/video-generation/video-synthesis`,
     { authorization: `Bearer ${key}`, 'x-dashscope-async': 'enable' },
-    { model, input, parameters: { resolution, ratio, duration, prompt_extend: false } },
+    mergeExtra({ model: route.model, input, parameters: { resolution, ratio, duration, prompt_extend: false } }, opts.extra),
     60000,
   );
   const taskId = (submit.output || {}).task_id;
   if (!taskId) throw new Error(`提交失败：${JSON.stringify(submit).slice(0, 300)}`);
-  const deadline = Date.now() + 360000;
-  let videoUrl = '';
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 5000));
-    const status = await getJson(`${entry.host}/api/v1/tasks/${encodeURIComponent(taskId)}`, { authorization: `Bearer ${key}` }, 30000);
-    const out = status.output || {};
-    if (out.task_status === 'SUCCEEDED') {
-      videoUrl = out.video_url || '';
-      break;
-    }
-    if (out.task_status === 'FAILED' || out.task_status === 'CANCELED') throw new Error(`任务 ${out.task_status}：${JSON.stringify(out).slice(0, 400)}`);
-  }
-  if (!videoUrl) throw new Error(`任务超时（task_id=${taskId}）`);
+  const final = await pollUntil(
+    () => getJson(`${route.entry.host}/api/v1/tasks/${encodeURIComponent(taskId)}`, { authorization: `Bearer ${key}` }, 30000),
+    (value) => {
+      const status = (value.output || {}).task_status;
+      if (status === 'FAILED' || status === 'CANCELED') throw new Error(`任务 ${status}：${JSON.stringify(value.output).slice(0, 400)}`);
+      return status === 'SUCCEEDED';
+    },
+    360000,
+  );
+  const videoUrl = (final.output || {}).video_url;
+  if (!videoUrl) throw new Error('任务成功但没有 video_url');
+  const dir = await ensureDir(config.outputDir || defaultOutputDir());
   return { saved: await download(videoUrl, fileOf(dir, 'video', 'mp4'), 180000), taskId };
 }
 
-async function makeAudio(ctx, config, route, text, opts) {
-  const { entry, model } = route;
-  const dir = await ensureDir(config.outputDir || defaultOutputDir());
-  const key = await resolveKey(ctx, entry);
-  const auth = { authorization: `Bearer ${key}` };
-  if (!model) throw new Error('audio_generate 需要 model（如 provider/model）');
-  if (entry.kind === 'ark') throw new Error(`火山方舟暂未适配 TTS 接口（provider=${route.providerId}）`);
-
-  if (entry.kind === 'openai') {
-    const format = String((opts && opts.format) || 'mp3');
-    const voice = String((opts && opts.voice) || config.voice || 'alloy');
-    const body = { model, input: text, voice, response_format: format };
-    const { buffer } = await request(`${entry.host}/v1/audio/speech`, 'POST', auth, body, 90000);
-    const saved = await saveBytes(fileOf(dir, 'audio', format), buffer);
-    return { saved, format, voice };
-  }
-
-  const format = String((opts && opts.format) || 'mp3');
-  const voice = String((opts && opts.voice) || config.voice || 'longanlingxin');
-  const sampleRate = Number((opts && opts.sampleRate) || 22050);
-  const data = await postJson(
-    `${entry.host}/api/v1/services/audio/tts/SpeechSynthesizer`,
-    auth,
-    { model, input: { text, voice, format, sample_rate: sampleRate } },
-    90000,
+async function video_ark(ctx, config, route, prompt, opts) {
+  const key = await resolveKey(ctx, route.entry);
+  const content = [{ type: 'text', text: prompt }];
+  if (opts && opts.imageUrl) content.unshift({ type: 'image_url', image_url: { url: String(opts.imageUrl) } });
+  const submit = await postJson(
+    `${route.entry.host}/api/v3/contents/generations/tasks`,
+    { authorization: `Bearer ${key}` },
+    mergeExtra({ model: route.model, content }, opts.extra),
+    60000,
   );
+  const taskId = submit.id || (submit.output && submit.output.task_id);
+  if (!taskId) throw new Error(`提交失败：${JSON.stringify(submit).slice(0, 300)}`);
+  const final = await pollUntil(
+    () => getJson(`${route.entry.host}/api/v3/contents/generations/tasks/${encodeURIComponent(taskId)}`, { authorization: `Bearer ${key}` }, 30000),
+    (value) => {
+      const state = value.status || (value.output && value.output.task_status) || '';
+      if (/failed|canceled/i.test(state)) throw new Error(`任务失败：${JSON.stringify(value).slice(0, 400)}`);
+      return /succeeded/i.test(state);
+    },
+    360000,
+  );
+  const videoUrl = (final.content && final.content.video_url) || final.video_url || (final.output && final.output.video_url);
+  if (!videoUrl) throw new Error('任务成功但没有 video_url');
+  const dir = await ensureDir(config.outputDir || defaultOutputDir());
+  return { saved: await download(videoUrl, fileOf(dir, 'video', 'mp4'), 180000), taskId };
+}
+
+async function video_zhipu(ctx, config, route, prompt, opts) {
+  const key = await resolveKey(ctx, route.entry);
+  const submit = await postJson(
+    `${route.entry.host}/api/paas/v4/videos/generations`,
+    { authorization: `Bearer ${key}` },
+    mergeExtra({ model: route.model, prompt }, opts.extra),
+    60000,
+  );
+  const taskId = submit.id || submit.task_id;
+  if (!taskId) throw new Error(`提交失败：${JSON.stringify(submit).slice(0, 300)}`);
+  const final = await pollUntil(
+    () => getJson(`${route.entry.host}/api/paas/v4/async-result/${encodeURIComponent(taskId)}`, { authorization: `Bearer ${key}` }, 30000),
+    (value) => {
+      const status = value.task_status || value.status || '';
+      if (/fail/i.test(status)) throw new Error(`任务失败：${JSON.stringify(value).slice(0, 400)}`);
+      return /success/i.test(status);
+    },
+    360000,
+  );
+  const results = final.video_result || final.data || [];
+  const videoUrl = (Array.isArray(results) ? results[0] : results)?.url || final.video_url;
+  if (!videoUrl) throw new Error('任务成功但没有视频 url');
+  const dir = await ensureDir(config.outputDir || defaultOutputDir());
+  return { saved: await download(videoUrl, fileOf(dir, 'video', 'mp4'), 180000), taskId };
+}
+
+async function video_fal(ctx, config, route, prompt, opts) {
+  const model = route.model || route.entry.videoModel;
+  if (!model) throw new Error('fal 视频需要在 config/route 里给 model（fal 模型路径）');
+  return falRun(ctx, config, route, model, mergeExtra({ prompt }, opts.extra), (data) => {
+    return (data.video && data.video.url) || (data.videos && data.videos[0] && data.videos[0].url) || '';
+  }, 'mp4', 480000);
+}
+
+async function video_google(ctx, config, route, prompt, opts) {
+  const key = await resolveKey(ctx, route.entry);
+  const model = route.model || route.entry.videoModel;
+  if (!model) throw new Error('google 视频需要 model（如 veo-3.1-generate-preview）');
+  const submit = await postJson(
+    `${route.entry.host}/v1beta/models/${encodeURIComponent(model)}:predictLongRunning?key=${encodeURIComponent(key)}`,
+    {},
+    mergeExtra({ instances: [{ prompt }], parameters: {} }, opts.extra),
+    60000,
+  );
+  const opName = submit.name;
+  if (!opName) throw new Error(`提交失败：${JSON.stringify(submit).slice(0, 300)}`);
+  const final = await pollUntil(
+    () => getJson(`${route.entry.host}/v1beta/${opName}?key=${encodeURIComponent(key)}`, {}, 30000),
+    (value) => {
+      if (value.done && value.error) throw new Error(`任务失败：${JSON.stringify(value.error).slice(0, 400)}`);
+      return Boolean(value.done);
+    },
+    480000,
+  );
+  const samples = (final.response && final.response.generateVideoResponse && final.response.generateVideoResponse.generatedSamples) || [];
+  const videoUri = (samples[0] && samples[0].video && samples[0].video.uri) || '';
+  if (!videoUri) throw new Error('任务完成但没有视频 uri');
+  const dir = await ensureDir(config.outputDir || defaultOutputDir());
+  const url = videoUri.includes('key=') ? videoUri : `${videoUri}${videoUri.includes('?') ? '&' : '?'}key=${encodeURIComponent(key)}`;
+  return { saved: await download(url, fileOf(dir, 'video', 'mp4'), 240000, { 'x-goog-api-key': key }), taskId: opName };
+}
+
+async function video_replicate(ctx, config, route, prompt, opts) {
+  return replicateRun(ctx, config, route, mergeExtra({ prompt }, opts.extra), 'mp4', 480000);
+}
+
+/* ------------------------------ 音频 ------------------------------ */
+
+async function audio_openai(ctx, config, route, text, opts) {
+  const key = await resolveKey(ctx, route.entry);
+  const format = String((opts && opts.format) || 'mp3');
+  const voice = String((opts && opts.voice) || route.entry.voice || config.voice || 'alloy');
+  const body = mergeExtra({ model: route.model, input: text, voice, response_format: format }, opts.extra);
+  const { buffer } = await request(`${route.entry.host}/v1/audio/speech`, 'POST', { authorization: `Bearer ${key}` }, JSON.stringify(body), 90000);
+  const dir = await ensureDir(config.outputDir || defaultOutputDir());
+  return { saved: await saveBytes(fileOf(dir, 'audio', format), buffer), format, voice };
+}
+
+async function audio_dashscope(ctx, config, route, text, opts) {
+  const key = await resolveKey(ctx, route.entry);
+  const format = String((opts && opts.format) || 'mp3');
+  const voice = String((opts && opts.voice) || route.entry.voice || config.voice || 'longanlingxin');
+  const sampleRate = Number((opts && opts.sampleRate) || 22050);
+  const body = mergeExtra({ model: route.model, input: { text, voice, format, sample_rate: sampleRate } }, opts.extra);
+  const data = await postJson(`${route.entry.host}/api/v1/services/audio/tts/SpeechSynthesizer`, { authorization: `Bearer ${key}` }, body, 90000);
   const audioUrl = ((data.output || {}).audio || {}).url;
   if (!audioUrl) throw new Error(`接口没有返回音频：${JSON.stringify(data).slice(0, 300)}`);
+  const dir = await ensureDir(config.outputDir || defaultOutputDir());
   return { saved: await download(audioUrl, fileOf(dir, 'audio', format), 60000), format, voice };
 }
+
+async function audio_elevenlabs(ctx, config, route, text, opts) {
+  const key = await resolveKey(ctx, route.entry);
+  const voice = String((opts && opts.voice) || route.entry.voice || config.voice || '21m00Tcm4TlvDq8ikWAM');
+  const model = route.model || route.entry.audioModel || 'eleven_multilingual_v2';
+  const format = String((opts && opts.format) || 'mp3');
+  const body = mergeExtra({ text, model_id: model }, opts.extra);
+  const { buffer } = await request(
+    `${route.entry.host}/v1/text-to-speech/${encodeURIComponent(voice)}`,
+    'POST',
+    { 'xi-api-key': key },
+    JSON.stringify(body),
+    90000,
+  );
+  const dir = await ensureDir(config.outputDir || defaultOutputDir());
+  return { saved: await saveBytes(fileOf(dir, 'audio', format), buffer), format, voice };
+}
+
+async function audio_google(ctx, config, route, text, opts) {
+  const key = await resolveKey(ctx, route.entry);
+  const model = route.model || route.entry.audioModel || 'gemini-2.5-flash-preview-tts';
+  const voice = String((opts && opts.voice) || route.entry.voice || config.voice || 'Kore');
+  const body = mergeExtra(
+    {
+      contents: [{ parts: [{ text }] }],
+      generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } },
+    },
+    opts.extra,
+  );
+  const data = await postJson(
+    `${route.entry.host}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`,
+    {},
+    body,
+    120000,
+  );
+  const parts = (((data.candidates || [])[0] || {}).content || {}).parts || [];
+  const inline = parts.find((part) => part && part.inlineData && part.inlineData.data);
+  if (!inline) throw new Error(`接口没有返回音频：${JSON.stringify(data).slice(0, 300)}`);
+  const dir = await ensureDir(config.outputDir || defaultOutputDir());
+  return { saved: await saveBytes(fileOf(dir, 'audio', 'wav'), decodeBase64(inline.inlineData.data)), format: 'wav', voice };
+}
+
+async function audio_replicate(ctx, config, route, text, opts) {
+  return replicateRun(ctx, config, route, mergeExtra({ text }, opts.extra), 'mp3', 240000);
+}
+
+/* ------------------------------ 通用 runner ------------------------------ */
+
+/** fal 队列：提交 → 轮询状态 → 取结果。pick(data) 从结果里取资源 URL。 */
+async function falRun(ctx, config, route, model, body, pick, ext, timeoutMs) {
+  const key = await resolveKey(ctx, route.entry);
+  const base = route.entry.host.replace(/\/+$/, '');
+  const submit = await postJson(`${base}/${model}`, { authorization: `Key ${key}` }, body, 60000);
+  const requestId = submit.request_id || submit.requestId;
+  if (!requestId) throw new Error(`提交失败：${JSON.stringify(submit).slice(0, 300)}`);
+  const statusUrl = submit.status_url || `${base}/${model}/requests/${requestId}/status`;
+  const responseUrl = submit.response_url || `${base}/${model}/requests/${requestId}`;
+  const final = await pollUntil(
+    () => getJson(statusUrl, { authorization: `Key ${key}` }, 30000),
+    (value) => {
+      const status = String(value.status || '').toUpperCase();
+      if (status === 'FAILED' || status === 'ERROR') throw new Error(`任务失败：${JSON.stringify(value).slice(0, 400)}`);
+      return status === 'COMPLETED';
+    },
+    timeoutMs - 60000,
+  );
+  const result = await getJson(final.response_url || responseUrl, { authorization: `Key ${key}` }, 60000);
+  const url = pick(result);
+  if (!url) throw new Error(`任务完成但没有资源 URL：${JSON.stringify(result).slice(0, 300)}`);
+  const dir = await ensureDir(config.outputDir || defaultOutputDir());
+  return { saved: await download(url, fileOf(dir, ext === 'mp4' ? 'video' : 'image', ext), 180000), taskId: requestId };
+}
+
+/** replicate：新建 prediction → 轮询 → 取输出 URL。model 支持 "owner/name" 或 "owner/name:version"。 */
+async function replicateRun(ctx, config, route, input, ext, timeoutMs) {
+  const key = await resolveKey(ctx, route.entry);
+  const host = route.entry.host.replace(/\/+$/, '');
+  const modelRef = route.model || '';
+  const body = { input };
+  if (modelRef.includes(':')) {
+    const idx = modelRef.lastIndexOf(':');
+    body.version = modelRef.slice(idx + 1);
+  } else if (modelRef.includes('/')) {
+    body.model = modelRef;
+  } else if (modelRef) {
+    body.version = modelRef;
+  } else {
+    throw new Error('replicate 需要 model（owner/name 或 owner/name:version）');
+  }
+  const created = await postJson(`${host}/v1/predictions`, { authorization: `Token ${key}` }, body, 60000);
+  const id = created.id;
+  if (!id) throw new Error(`提交失败：${JSON.stringify(created).slice(0, 300)}`);
+  const final = await pollUntil(
+    () => getJson(`${host}/v1/predictions/${encodeURIComponent(id)}`, { authorization: `Token ${key}` }, 30000),
+    (value) => {
+      if (value.status === 'failed' || value.status === 'canceled') throw new Error(`任务失败：${JSON.stringify(value).slice(0, 400)}`);
+      return value.status === 'succeeded';
+    },
+    timeoutMs,
+  );
+  const output = final.output;
+  const url = Array.isArray(output) ? output[0] : typeof output === 'string' ? output : output && (output.url || output.video || output.image);
+  if (!url) throw new Error(`任务完成但没有输出 URL：${JSON.stringify(final).slice(0, 300)}`);
+  const dir = await ensureDir(config.outputDir || defaultOutputDir());
+  return { saved: await download(url, fileOf(dir, ext === 'mp4' ? 'video' : ext === 'mp3' ? 'audio' : 'image', ext), 180000), taskId: id };
+}
+
+/* ------------------------------ 适配器注册 ------------------------------ */
+
+const ADAPTERS = {
+  openai: { image: image_openai, audio: audio_openai },
+  dashscope: { image: image_dashscope, video: video_dashscope, audio: audio_dashscope },
+  ark: { image: image_ark, video: video_ark },
+  zhipu: { image: image_zhipu, video: video_zhipu },
+  fal: { image: image_fal, video: video_fal },
+  stability: { image: image_stability },
+  elevenlabs: { audio: audio_elevenlabs },
+  google: { image: image_google, video: video_google, audio: audio_google },
+  replicate: { image: image_replicate, video: video_replicate, audio: audio_replicate },
+};
+
+const DEFAULT_IMAGE_MODEL = { openai: 'gpt-image-1', dashscope: 'wan2.7-image', zhipu: 'cogview-4', google: 'imagen-4.0-generate-001' };
+const DEFAULT_VIDEO_MODEL = { dashscope: 'wan3.0-video', zhipu: 'cogvideox-3', google: 'veo-3.1-generate-preview' };
+const DEFAULT_AUDIO_MODEL = { openai: 'tts-1', dashscope: 'qwen-audio-3.0-tts-plus', elevenlabs: 'eleven_multilingual_v2', google: 'gemini-2.5-flash-preview-tts' };
 
 export function createMediaTools(ctx, options = {}) {
   const config = options || {};
   const table = providerTable(config);
   const configured = Object.keys(table).filter((id) => id !== '__default');
   const routeHint = configured.length ? `已配置 provider：${configured.join(', ')}；model 用 "provider/model"。` : '';
+
+  async function run(kindOf, route, extra) {
+    const adapter = ADAPTERS[route.entry.kind];
+    const fn = adapter && adapter[kindOf];
+    if (!fn) throw new Error(`provider "${route.providerId}"（kind=${route.entry.kind}）不支持${kindOf}`);
+    return fn(ctx, config, route, ...extra);
+  }
 
   const modelsTool = {
     name: 'media_models',
@@ -382,8 +651,7 @@ export function createMediaTools(ctx, options = {}) {
       render: (args, value) => {
         const lines = [];
         for (const provider of value.providers) {
-          const mark = provider.callable ? '✓ 可调用' : '× 未配置生成端点';
-          lines.push(`· ${provider.id}  ${mark}`);
+          lines.push(`· ${provider.id}  ${provider.callable ? '✓ 可调用' : '× 未配置生成端点'}${provider.kind ? '  (' + provider.kind + ')' : ''}`);
           for (const model of provider.models) lines.push(`  - [${model.kind}] ${model.id}`);
         }
         lines.push('', value.note);
@@ -405,13 +673,13 @@ export function createMediaTools(ctx, options = {}) {
           .map((model) => ({ id: model.id, name: model.name, kind: mediaKindOf(model.id, model.name) }))
           .filter((model) => model.kind !== 'chat');
         if (media.length === 0) continue;
-        out.push({ id: provider.id, callable: Boolean(table[provider.id]), models: media });
+        out.push({ id: provider.id, callable: Boolean(table[provider.id]), kind: table[provider.id]?.kind, models: media });
       }
       return {
         providers: out,
         note:
-          '要让某个 provider 的生成模型可调用，在 media 插件 config.providers.<id> 里写 host + apiKeyEnv（或 apiKey）。' +
-          ' 调用时 model 传 "provider/model"，例如 ark/doubao-seedream-5-0、openai/gpt-image-1。',
+          '要让某个 provider 的生成模型可调用，在 media 插件 config.providers.<id> 里写 host + kind + apiKeyEnv（或 apiKey）。' +
+          ' 调用时 model 传 "provider/model"；工具参数 extra 会合并进请求体。',
       };
     },
   };
@@ -424,6 +692,7 @@ export function createMediaTools(ctx, options = {}) {
       properties: {
         prompt: { type: 'string', description: '图片描述（中文/英文均可）' },
         model: { type: 'string', description: '可选，"provider/model"（如 ark/doubao-seedream-5-0、openai/gpt-image-1）' },
+        extra: { type: 'object', description: '可选，原样合并进请求体（模型私有参数，如 size、steps）' },
       },
       required: ['prompt'],
       additionalProperties: false,
@@ -437,13 +706,17 @@ export function createMediaTools(ctx, options = {}) {
         return blocks;
       },
     },
-    timeoutMs: 240000,
+    timeoutMs: 300000,
     async execute(args) {
       const prompt = String((args && args.prompt) || '').trim();
       if (!prompt) throw new Error('prompt 必填');
       const route = pickRoute(config, args && args.model);
-      route.model = route.model || route.entry.imageModel || config.imageModel || defaultImageModel(route.entry.kind);
-      const saved = await makeImage(ctx, config, route, prompt, {});
+      if (!ADAPTERS[route.entry.kind] || !ADAPTERS[route.entry.kind].image) {
+        throw new Error(`provider "${route.providerId}"（kind=${route.entry.kind}）不支持图片生成`);
+      }
+      route.model = route.model || route.entry.imageModel || config.imageModel || DEFAULT_IMAGE_MODEL[route.entry.kind];
+      if (!route.model) throw new Error(`provider "${route.providerId}" 需要 image model`);
+      const saved = await run('image', route, [prompt, { extra: args.extra }]);
       const bytes = await readFile(saved.file);
       const block = await imageBlock(ctx, bytes, 'image/png');
       return { ok: true, kind: 'image', provider: route.providerId, model: route.model, prompt, file: saved.file, bytes: saved.bytes, block };
@@ -457,11 +730,12 @@ export function createMediaTools(ctx, options = {}) {
       type: 'object',
       properties: {
         prompt: { type: 'string', description: '视频描述' },
-        model: { type: 'string', description: '可选，"provider/model"（如 ark/doubao-seedance-…、bailian/wan3.0-video）' },
+        model: { type: 'string', description: '可选，"provider/model"' },
         duration: { type: 'number', description: '秒数（默认 3；越长越贵）' },
         resolution: { type: 'string', description: '480P / 720P / 1080P（默认 480P，dashscope 生效）' },
         ratio: { type: 'string', description: '比例，默认 adaptive（dashscope 生效）' },
         imageUrl: { type: 'string', description: '可选：首帧图片 URL（图生视频）' },
+        extra: { type: 'object', description: '可选，原样合并进请求体（模型私有参数）' },
       },
       required: ['prompt'],
       additionalProperties: false,
@@ -474,13 +748,17 @@ export function createMediaTools(ctx, options = {}) {
         return blocks;
       },
     },
-    timeoutMs: 480000,
+    timeoutMs: 600000,
     async execute(args) {
       const prompt = String((args && args.prompt) || '').trim();
       if (!prompt) throw new Error('prompt 必填');
       const route = pickRoute(config, args && args.model);
-      route.model = route.model || route.entry.videoModel || config.videoModel || defaultVideoModel(route.entry.kind);
-      const result = await makeVideo(ctx, config, route, prompt, args || {});
+      if (!ADAPTERS[route.entry.kind] || !ADAPTERS[route.entry.kind].video) {
+        throw new Error(`provider "${route.providerId}"（kind=${route.entry.kind}）不支持视频生成`);
+      }
+      route.model = route.model || route.entry.videoModel || config.videoModel || DEFAULT_VIDEO_MODEL[route.entry.kind];
+      if (!route.model) throw new Error(`provider "${route.providerId}" 需要 video model`);
+      const result = await run('video', route, [prompt, args || {}]);
       const block = await fileBlock(ctx, result.saved.file, 'video/mp4');
       return { ok: true, kind: 'video', provider: route.providerId, model: route.model, prompt, taskId: result.taskId, file: result.saved.file, bytes: result.saved.bytes, block };
     },
@@ -493,10 +771,11 @@ export function createMediaTools(ctx, options = {}) {
       type: 'object',
       properties: {
         text: { type: 'string', description: '要合成的文本' },
-        model: { type: 'string', description: '可选，"provider/model"（如 openai/tts-1、bailian/qwen-audio-3.0-tts-plus）' },
+        model: { type: 'string', description: '可选，"provider/model"' },
         voice: { type: 'string', description: '音色，覆盖默认值' },
         format: { type: 'string', description: 'mp3 / pcm / wav / opus，默认 mp3' },
         sampleRate: { type: 'number', description: '采样率，默认 22050（dashscope 生效）' },
+        extra: { type: 'object', description: '可选，原样合并进请求体（模型私有参数）' },
       },
       required: ['text'],
       additionalProperties: false,
@@ -509,14 +788,19 @@ export function createMediaTools(ctx, options = {}) {
         return blocks;
       },
     },
-    timeoutMs: 120000,
+    timeoutMs: 180000,
     async execute(args) {
       const text = String((args && args.text) || '').trim();
       if (!text) throw new Error('text 必填');
       const route = pickRoute(config, args && args.model);
-      route.model = route.model || route.entry.audioModel || config.audioModel || defaultAudioModel(route.entry.kind);
-      const result = await makeAudio(ctx, config, route, text, args || {});
-      const block = await fileBlock(ctx, result.saved.file, result.format === 'wav' ? 'audio/wav' : result.format === 'opus' ? 'audio/opus' : 'audio/mpeg');
+      if (!ADAPTERS[route.entry.kind] || !ADAPTERS[route.entry.kind].audio) {
+        throw new Error(`provider "${route.providerId}"（kind=${route.entry.kind}）不支持音频生成`);
+      }
+      route.model = route.model || route.entry.audioModel || config.audioModel || DEFAULT_AUDIO_MODEL[route.entry.kind];
+      if (!route.model) throw new Error(`provider "${route.providerId}" 需要 audio model`);
+      const result = await run('audio', route, [text, args || {}]);
+      const mediaType = result.format === 'wav' ? 'audio/wav' : result.format === 'opus' ? 'audio/opus' : 'audio/mpeg';
+      const block = await fileBlock(ctx, result.saved.file, mediaType);
       return { ok: true, kind: 'audio', provider: route.providerId, model: route.model, voice: result.voice, format: result.format, file: result.saved.file, bytes: result.saved.bytes, block };
     },
   };
@@ -524,7 +808,6 @@ export function createMediaTools(ctx, options = {}) {
   return { models: modelsTool, image: imageTool, video: videoTool, audio: audioTool };
 }
 
-/** 注册四个工具；返回 disposer。 */
 export function apply(ctx, config) {
   const tools = createMediaTools(ctx, config);
   const disposers = [
@@ -540,4 +823,4 @@ export function apply(ctx, config) {
 
 export const name = 'media';
 export const inject = ['tools', 'credentials', 'attachments'];
-export { mediaKindOf, providerTable, DEFAULT_DASHSCOPE_HOST, DEFAULT_OPENAI_HOST, DEFAULT_ARK_HOST };
+export { mediaKindOf, providerTable, ADAPTERS };

@@ -247,7 +247,7 @@ test('openai 音频：/v1/audio/speech 返回字节', async () => {
 
 test('openai provider 下视频明确报错', async () => {
   const tools = createMediaTools(ctxWith(), { outputDir: 'x', provider: 'openai' });
-  await assert.rejects(() => tools.video.execute({ prompt: 'x' }), /没有标准的视频生成接口/);
+  await assert.rejects(() => tools.video.execute({ prompt: 'x' }), /不支持视频生成/);
 });
 
 function ctxWithLlm(providers) {
@@ -321,6 +321,182 @@ test('ark 视频：提交任务 + 轮询 + 下载', async () => {
       assert.equal(value.provider, 'ark');
       assert.equal(value.taskId, 'cgt-1');
       assert.equal(value.bytes, 2);
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+function ctxWithKey(ref = 'BAILIAN_TPP_API_KEY') {
+  return {
+    credentials: { resolve: async (name) => (name === ref ? { value: KEY, source: 'file' } : undefined) },
+  };
+}
+
+test('zhipu 图片：/api/paas/v4/images/generations', async () => {
+  await withDir(async (dir) => {
+    const tools = createMediaTools(ctxWith(), {
+      outputDir: dir,
+      providers: { zhipu: { kind: 'zhipu', host: 'https://open.bigmodel.cn', apiKeyEnv: 'BAILIAN_TPP_API_KEY' } },
+    });
+    const stub = stubFetch([
+      { match: '/api/paas/v4/images/generations', reply: jsonReply({ data: [{ url: 'https://cdn.example/z.png' }] }) },
+      { match: 'cdn.example/z.png', reply: bytesReply(new Uint8Array([1, 2]), 'image/png') },
+    ]);
+    try {
+      const value = await tools.image.execute({ prompt: '猫', model: 'zhipu/cogview-4' });
+      assert.equal(value.provider, 'zhipu');
+      assert.equal(value.bytes, 2);
+      const body = JSON.parse(stub.calls[0].init.body);
+      assert.equal(body.model, 'cogview-4');
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+test('stability 图片：multipart + 二进制', async () => {
+  await withDir(async (dir) => {
+    const tools = createMediaTools(ctxWith(), {
+      outputDir: dir,
+      providers: { stability: { kind: 'stability', host: 'https://api.stability.ai', apiKeyEnv: 'BAILIAN_TPP_API_KEY' } },
+    });
+    const stub = stubFetch([
+      { match: '/v2beta/stable-image/generate/core', reply: bytesReply(new Uint8Array([3, 3, 3]), 'image/png') },
+    ]);
+    try {
+      const value = await tools.image.execute({ prompt: '猫', model: 'stability/core' });
+      assert.equal(value.bytes, 3);
+      const call = stub.calls[0];
+      assert.ok(call.init.body instanceof FormData);
+      assert.match(call.init.headers.accept, /image/);
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+test('elevenlabs 音频：xi-api-key + 二进制', async () => {
+  await withDir(async (dir) => {
+    const tools = createMediaTools(ctxWith(), {
+      outputDir: dir,
+      providers: { eleven: { kind: 'elevenlabs', host: 'https://api.elevenlabs.io', apiKeyEnv: 'BAILIAN_TPP_API_KEY', voice: 'voice-1' } },
+    });
+    const stub = stubFetch([
+      { match: (href) => href.includes('/v1/text-to-speech/voice-1'), reply: bytesReply(new Uint8Array([6, 6]), 'audio/mpeg') },
+    ]);
+    try {
+      const value = await tools.audio.execute({ text: '你好', model: 'eleven/eleven_multilingual_v2' });
+      assert.equal(value.voice, 'voice-1');
+      assert.equal(value.bytes, 2);
+      assert.equal(stub.calls[0].init.headers['xi-api-key'], KEY);
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+test('google 图片：/v1beta/models/{model}:predict', async () => {
+  await withDir(async (dir) => {
+    const tools = createMediaTools(ctxWith(), {
+      outputDir: dir,
+      providers: { google: { kind: 'google', host: 'https://generativelanguage.googleapis.com', apiKeyEnv: 'BAILIAN_TPP_API_KEY' } },
+    });
+    const b64 = Buffer.from([8, 8]).toString('base64');
+    const stub = stubFetch([
+      { match: (href) => href.includes(':predict') && !href.includes('LongRunning'), reply: jsonReply({ predictions: [{ bytesBase64Encoded: b64, mimeType: 'image/png' }] }) },
+    ]);
+    try {
+      const value = await tools.image.execute({ prompt: '猫', model: 'google/imagen-4.0-generate-001' });
+      assert.equal(value.bytes, 2);
+      assert.match(stub.calls[0].url, /key=/);
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+test('google 视频：predictLongRunning + 轮询 + 带 key 下载', async () => {
+  await withDir(async (dir) => {
+    const tools = createMediaTools(ctxWith(), {
+      outputDir: dir,
+      providers: { google: { kind: 'google', host: 'https://generativelanguage.googleapis.com', apiKeyEnv: 'BAILIAN_TPP_API_KEY' } },
+    });
+    const stub = stubFetch([
+      { match: (href) => href.includes(':predictLongRunning'), reply: jsonReply({ name: 'operations/abc' }) },
+      { match: (href) => href.includes('operations/abc'), reply: jsonReply({ done: true, response: { generateVideoResponse: { generatedSamples: [{ video: { uri: 'https://cdn.example/g.mp4' } }] } } }) },
+      { match: 'cdn.example/g.mp4', reply: bytesReply(new Uint8Array([4, 4]), 'video/mp4') },
+    ]);
+    try {
+      const value = await tools.video.execute({ prompt: '猫', model: 'google/veo-3.1-generate-preview' });
+      assert.equal(value.bytes, 2);
+      assert.equal(value.taskId, 'operations/abc');
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+test('fal 图片：队列提交 + 状态 + 结果', async () => {
+  await withDir(async (dir) => {
+    const tools = createMediaTools(ctxWith(), {
+      outputDir: dir,
+      providers: { fal: { kind: 'fal', host: 'https://queue.fal.run', apiKeyEnv: 'BAILIAN_TPP_API_KEY' } },
+    });
+    const stub = stubFetch([
+      { match: (href, init) => href.endsWith('/fal-ai/flux/schnell') && init.method === 'POST', reply: jsonReply({ request_id: 'r1', status_url: 'https://queue.fal.run/fal-ai/flux/schnell/requests/r1/status', response_url: 'https://queue.fal.run/fal-ai/flux/schnell/requests/r1' }) },
+      { match: (href) => href.endsWith('/requests/r1/status'), reply: jsonReply({ status: 'COMPLETED', response_url: 'https://queue.fal.run/fal-ai/flux/schnell/requests/r1' }) },
+      { match: (href, init) => href.endsWith('/requests/r1') && init.method === 'GET', reply: jsonReply({ images: [{ url: 'https://cdn.example/f.png' }] }) },
+      { match: 'cdn.example/f.png', reply: bytesReply(new Uint8Array([7]), 'image/png') },
+    ]);
+    try {
+      const value = await tools.image.execute({ prompt: '猫', model: 'fal/fal-ai/flux/schnell' });
+      assert.equal(value.bytes, 1);
+      assert.equal(value.provider, 'fal');
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+test('replicate 图片：predictions + 轮询 + 输出 URL', async () => {
+  await withDir(async (dir) => {
+    const tools = createMediaTools(ctxWith(), {
+      outputDir: dir,
+      providers: { replicate: { kind: 'replicate', host: 'https://api.replicate.com', apiKeyEnv: 'BAILIAN_TPP_API_KEY' } },
+    });
+    const stub = stubFetch([
+      { match: (href, init) => href.endsWith('/v1/predictions') && init.method === 'POST', reply: jsonReply({ id: 'p1' }) },
+      { match: (href) => href.endsWith('/v1/predictions/p1'), reply: jsonReply({ status: 'succeeded', output: ['https://cdn.example/r.png'] }) },
+      { match: 'cdn.example/r.png', reply: bytesReply(new Uint8Array([2, 2]), 'image/png') },
+    ]);
+    try {
+      const value = await tools.image.execute({ prompt: '猫', model: 'replicate/black-forest-labs/flux-schnell:abc123' });
+      assert.equal(value.bytes, 2);
+      const body = JSON.parse(stub.calls[0].init.body);
+      assert.equal(body.version, 'abc123');
+      assert.equal(body.input.prompt, '猫');
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+test('zhipu 视频：提交 + async-result', async () => {
+  await withDir(async (dir) => {
+    const tools = createMediaTools(ctxWith(), {
+      outputDir: dir,
+      providers: { zhipu: { kind: 'zhipu', host: 'https://open.bigmodel.cn', apiKeyEnv: 'BAILIAN_TPP_API_KEY' } },
+    });
+    const stub = stubFetch([
+      { match: '/api/paas/v4/videos/generations', reply: jsonReply({ id: 'v1' }) },
+      { match: (href) => href.includes('/api/paas/v4/async-result/v1'), reply: jsonReply({ task_status: 'SUCCESS', video_result: [{ url: 'https://cdn.example/z.mp4' }] }) },
+      { match: 'cdn.example/z.mp4', reply: bytesReply(new Uint8Array([9, 9, 9]), 'video/mp4') },
+    ]);
+    try {
+      const value = await tools.video.execute({ prompt: '猫', model: 'zhipu/cogvideox-3' });
+      assert.equal(value.taskId, 'v1');
+      assert.equal(value.bytes, 3);
     } finally {
       stub.restore();
     }

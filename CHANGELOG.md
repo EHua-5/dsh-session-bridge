@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.0 — 2026-11-23
+
+- media 新增 6 家适配器：zhipu（CogView/CogVideoX）、fal（队列）、stability（multipart）、
+  elevenlabs（TTS）、google（Imagen/Veo/Gemini TTS）、replicate（predictions）。
+- 全部支持视频（除 stability/elevenlabs 本就不提供）；新增 `extra` 参数合并进请求体。
+- 适配器按官方文档实现，未逐一真机验证。
+
 ## 0.7.0 — 2026-11-23
 
 - media 按 provider 路由：`media.config.providers` 表（provider id → kind/host/apiKeyEnv）。
