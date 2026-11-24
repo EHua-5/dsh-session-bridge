@@ -279,6 +279,8 @@ test('media_models：列出能生成的多模态模型并标出可调用', async
   assert.equal(byId.bailian.callable, false);
   const text = tools.models.output.render({}, value)[0].text;
   assert.match(text, /\[image\] doubao-seedream-5-0/);
+  // 未配置的 provider 不能出现 undefined 字段（工具输出要求 lossless JSON）
+  assert.deepEqual(JSON.parse(JSON.stringify(value)), value);
 });
 
 test('ark 图片：/api/v3/images/generations + url 下载', async () => {

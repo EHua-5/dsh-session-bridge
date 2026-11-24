@@ -673,7 +673,10 @@ export function createMediaTools(ctx, options = {}) {
           .map((model) => ({ id: model.id, name: model.name, kind: mediaKindOf(model.id, model.name) }))
           .filter((model) => model.kind !== 'chat');
         if (media.length === 0) continue;
-        out.push({ id: provider.id, callable: Boolean(table[provider.id]), kind: table[provider.id]?.kind, models: media });
+        const entry = table[provider.id];
+        const row = { id: provider.id, callable: Boolean(entry), models: media };
+        if (entry && entry.kind) row.kind = entry.kind;
+        out.push(row);
       }
       return {
         providers: out,
@@ -822,5 +825,5 @@ export function apply(ctx, config) {
 }
 
 export const name = 'media';
-export const inject = ['tools', 'credentials', 'attachments'];
+export const inject = ['tools', 'credentials', 'attachments', 'llm'];
 export { mediaKindOf, providerTable, ADAPTERS };
