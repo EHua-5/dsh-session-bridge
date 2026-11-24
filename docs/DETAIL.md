@@ -65,7 +65,14 @@ GET/POST /features/model-tools   按会话的换模型开关（本机、免 toke
   → `output.task_id` → 轮询 `GET /api/v1/tasks/{id}` → `output.video_url`
 - 音频：`POST /api/v1/services/audio/tts/SpeechSynthesizer` → `output.audio.url`
 
-key 解析顺序：`config.apiKey` → 环境变量 `BAILIAN_TPP_API_KEY` → `ctx.credentials.resolve`。
+后端：`config.provider` 取 `dashscope`（默认）或 `openai`。
+
+- `dashscope`：图走 chat/completions（user-only + content 数组），视频走异步任务，音频走 SpeechSynthesizer；
+- `openai`：图走 `/v1/images/generations`（`b64_json`，回退 `url`），音频走 `/v1/audio/speech`（返回字节）；
+  视频没有事实标准，`openai` 下会明确报错（只支持 DashScope）。
+- `config.host` 覆盖端点（默认：dashscope=token-plan 主机，openai=`https://api.openai.com`）。
+
+key 解析顺序：`config.apiKey` → `config.apiKeyEnv`（默认 `BAILIAN_TPP_API_KEY`）对应的环境变量 → `ctx.credentials.resolve`。
 图片经附件服务转成 image block（GUI 直接显示）；附件不可用时退回 markdown 链接。
 
 ## 安全说明

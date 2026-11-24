@@ -184,3 +184,68 @@ test('附件服务可用时返回 image block', async () => {
     }
   });
 });
+
+test('openai 图片：/v1/images/generations + b64_json', async () => {
+  await withDir(async (dir) => {
+    const tools = createMediaTools(ctxWith(), { outputDir: dir, provider: 'openai', apiKeyEnv: 'BAILIAN_TPP_API_KEY' });
+    const b64 = Buffer.from([1, 2, 3, 4]).toString('base64');
+    const stub = stubFetch([
+      { match: '/v1/images/generations', reply: jsonReply({ data: [{ b64_json: b64 }] }) },
+    ]);
+    try {
+      const value = await tools.image.execute({ prompt: '一只猫' });
+      assert.equal(value.ok, true);
+      assert.equal(value.provider, 'openai');
+      assert.equal(value.model, 'gpt-image-1');
+      assert.equal(value.bytes, 4);
+      const body = JSON.parse(stub.calls[0].init.body);
+      assert.equal(body.prompt, '一只猫');
+      assert.equal(body.response_format, 'b64_json');
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+test('openai 图片：没有 b64_json 时回退下载 url', async () => {
+  await withDir(async (dir) => {
+    const tools = createMediaTools(ctxWith(), { outputDir: dir, provider: 'openai' });
+    const stub = stubFetch([
+      { match: '/v1/images/generations', reply: jsonReply({ data: [{ url: 'https://cdn.example/o.png' }] }) },
+      { match: 'cdn.example/o.png', reply: bytesReply(new Uint8Array([9, 9]), 'image/png') },
+    ]);
+    try {
+      const value = await tools.image.execute({ prompt: 'x' });
+      assert.equal(value.bytes, 2);
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+test('openai 音频：/v1/audio/speech 返回字节', async () => {
+  await withDir(async (dir) => {
+    const tools = createMediaTools(ctxWith(), { outputDir: dir, provider: 'openai' });
+    const stub = stubFetch([
+      { match: '/v1/audio/speech', reply: bytesReply(new Uint8Array([7, 7, 7]), 'audio/mpeg') },
+    ]);
+    try {
+      const value = await tools.audio.execute({ text: '你好' });
+      assert.equal(value.ok, true);
+      assert.equal(value.provider, 'openai');
+      assert.equal(value.model, 'tts-1');
+      assert.equal(value.voice, 'alloy');
+      assert.equal(value.bytes, 3);
+      const body = JSON.parse(stub.calls[0].init.body);
+      assert.equal(body.input, '你好');
+      assert.equal(body.response_format, 'mp3');
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+test('openai provider 下视频明确报错', async () => {
+  const tools = createMediaTools(ctxWith(), { outputDir: 'x', provider: 'openai' });
+  await assert.rejects(() => tools.video.execute({ prompt: 'x' }), /只支持 DashScope/);
+});

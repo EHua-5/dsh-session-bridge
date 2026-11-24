@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0 — 2026-11-23
+
+- `media` 支持 `provider: openai`：图片走 `/v1/images/generations`（b64_json，回退 url）、
+  音频走 `/v1/audio/speech`（返回字节）；视频仍只支持 DashScope，`openai` 下明确报错。
+- `config.host` 可覆盖端点（默认 dashscope=token-plan 主机，openai=api.openai.com）。
+
 ## 0.5.2 — 2026-11-23
 
 - `session_message_send` 新增可选 `hint`：把“该用哪个工具（image_generate 等）、不需要切换聊天模型”
