@@ -5,15 +5,16 @@
 
 English | [简体中文](./README.zh.md)
 
-<!-- 截图就位后取消注释：
 <p align="center">
-  <img src="./assets/model-switch.png" alt="composer switch" width="70%" />
+  <img src="./assets/model-switch.png" alt="Allow other sessions to change this model" width="420" />
 </p>
--->
 
 ## Screenshots
 
-_待补：模型菜单里的同意开关、一次生成结果。文件命名与位置见 [`assets/README.md`](./assets/README.md)。_
+**Consent switch** — when on, other sessions may switch this one's model; when off, those calls are
+rejected. A session can always switch its own model, and messages are not gated by this switch.
+
+_Still to come: a generation result at `assets/generation.png` (see [`assets/README.md`](./assets/README.md))._
 
 Local session bridge for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH):
 a **local HTTP inbox** that delivers text into live sessions, **cross-session model switching and

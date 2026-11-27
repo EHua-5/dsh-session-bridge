@@ -5,15 +5,15 @@
 
 [English](./README.md) | 简体中文
 
-<!-- 截图就位后取消注释：
 <p align="center">
-  <img src="./assets/model-switch.png" alt="composer switch" width="70%" />
+  <img src="./assets/model-switch.png" alt="允许其他会话更换本会话的模型" width="420" />
 </p>
--->
 
-## Screenshots
+## 截图
 
-_待补：模型菜单里的同意开关、一次生成结果。文件命名与位置见 [`assets/README.md`](./assets/README.md)。_
+**同意开关** —— 开启后，其他会话可以给本会话换模型；关闭后这些调用会被拒绝。本会话自己改自己的模型不受影响，给本会话发消息也不受这个开关限制。
+
+_还差一张生成结果：`assets/generation.png`（见 [`assets/README.md`](./assets/README.md)）。_
 
 本地运行的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）会话桥：
 **本地 HTTP 收件箱**把文字投进活会话、**按"目标同意"的跨会话换模型/发消息**、
