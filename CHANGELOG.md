@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.2 — 2026-11-27
+
+- `/features/model-tools`：接受 `Origin: null`（桌面 file:// 壳），预检补
+  `Access-Control-Allow-Private-Network: true`；外部 http(s) Origin 仍 403。
+
 ## 0.8.1 — 2026-11-24（审查修复）
 
 - media 适配器修正：dashscope 图片改原生 multimodal-generation 端点；openai 图片不再对

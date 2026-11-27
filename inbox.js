@@ -144,6 +144,8 @@ function isLoopbackHostname(hostname) {
 /** 浏览器来源只允许回环页面（GUI 是 127.0.0.1:<随机端口>）；无 Origin 视为非浏览器。 */
 function originAllowed(origin) {
   if (!origin) return true;
+  // 桌面壳（file://）发的是 Origin: null，同样只在本机可达
+  if (origin === 'null') return true;
   try {
     return isLoopbackHostname(new URL(origin).hostname);
   } catch {
@@ -648,6 +650,7 @@ export function createBridge(ctx, options = {}) {
         'access-control-allow-methods': 'GET, POST, OPTIONS',
         'access-control-allow-headers': 'content-type, x-inbox-token',
         'access-control-max-age': '600',
+        'access-control-allow-private-network': 'true',
         'content-length': '0',
       });
       res.end();
