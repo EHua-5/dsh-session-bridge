@@ -87,15 +87,16 @@ window.__ModuleLoader__.load({
     }
 
     // 与 agent-team 的 TeamModeToggle 一致的排布：左侧标签 + 说明图标，右侧胶囊开关
+    // 与官方 TeamModeToggle 的行样式对齐：gap 16 / min-height 34 / padding 0 8
     const rowStyle = {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'space-between',
-      gap: '12px',
-      padding: '6px 10px',
+      gap: '16px',
+      padding: '0 8px',
       minHeight: '34px',
     };
-    const labelStyle = { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '13px', lineHeight: 1.4 };
+    const labelStyle = { display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '13px', lineHeight: '20px' };
     const infoButtonStyle = {
       width: '16px',
       height: '16px',
