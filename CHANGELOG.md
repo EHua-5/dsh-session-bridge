@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.3 — 2026-11-28
+
+- 开关端点挂到 DSH 的 web 服务（/session-bridge/features），客户端改同源相对路径；
+  跨端口 CORS 在桌面壳下不可靠的问题从根上绕开。
+
 ## 0.8.2 — 2026-11-27
 
 - `/features/model-tools`：接受 `Origin: null`（桌面 file:// 壳），预检补

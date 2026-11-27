@@ -628,6 +628,59 @@ export function createBridge(ctx, options = {}) {
     return replayed;
   }
 
+  async function serveFeatures(req, res, url) {
+    if (req.method === 'GET') {
+      const sessionId = String(url.searchParams.get('sessionId') || '');
+      if (!sessionId) return send(res, 400, { ok: false, error: 'missing sessionId' });
+      return send(res, 200, { ok: true, sessionId, enabled: features.isEnabled(sessionId) });
+    }
+    if (req.method === 'POST') {
+      let raw = '';
+      try {
+        raw = await readBody(req, MAX_BODY);
+      } catch (error) {
+        if (error && error.code === 'E_TOO_LARGE') return send(res, 413, { ok: false, error: 'body too large' });
+        throw error;
+      }
+      let body = {};
+      try {
+        body = JSON.parse(raw || '{}');
+      } catch {
+        return send(res, 400, { ok: false, error: 'bad json' });
+      }
+      const sessionId = String(body.sessionId || '');
+      if (!sessionId) return send(res, 400, { ok: false, error: 'missing sessionId' });
+      features.set(sessionId, Boolean(body.enabled));
+      log(`feature model-tools ${body.enabled ? 'on' : 'off'} → ${sessionId}`);
+      return send(res, 200, { ok: true, sessionId, enabled: features.isEnabled(sessionId) });
+    }
+    return send(res, 405, { ok: false, error: 'method not allowed' });
+  }
+
+  // 同一路径也挂到 DSH 自己的 web 服务上，客户端用相对路径访问（同源，无跨端口 CORS）
+  const webServer = typeof ctx.get === 'function' ? ctx.get('webServer') : undefined;
+  if (webServer && typeof webServer.register === 'function') {
+    try {
+      const disposeRoute = webServer.register({
+        kind: 'exact',
+        path: '/session-bridge/features',
+        handler: (req, res) => {
+          const url = new URL(req.url || '/', 'http://127.0.0.1');
+          void serveFeatures(req, res, url);
+        },
+      });
+      ctx.effect(() => () => {
+        try {
+          disposeRoute();
+        } catch {
+          // 已卸载
+        }
+      });
+    } catch {
+      // 路由已被占用：保留本机端口作为回退
+    }
+  }
+
   async function handle(req, res) {
     const cfg = readCfg();
     const url = new URL(req.url || '/', 'http://127.0.0.1');
@@ -660,32 +713,7 @@ export function createBridge(ctx, options = {}) {
     // 按会话的功能开关：**只允许回环页面、故意不校验 token**——它决定"某个会话能不能
     // **被别的会话**换模型"（目标同意），不读不写任何消息内容。页面拿不到桥的 token。
     if (url.pathname === '/features/model-tools') {
-      if (req.method === 'GET') {
-        const sessionId = String(url.searchParams.get('sessionId') || '');
-        if (!sessionId) return send(res, 400, { ok: false, error: 'missing sessionId' });
-        return send(res, 200, { ok: true, sessionId, enabled: features.isEnabled(sessionId) });
-      }
-      if (req.method === 'POST') {
-        let raw = '';
-        try {
-          raw = await readBody(req, MAX_BODY);
-        } catch (error) {
-          if (error && error.code === 'E_TOO_LARGE') return send(res, 413, { ok: false, error: 'body too large' });
-          throw error;
-        }
-        let body = {};
-        try {
-          body = JSON.parse(raw || '{}');
-        } catch {
-          return send(res, 400, { ok: false, error: 'bad json' });
-        }
-        const sessionId = String(body.sessionId || '');
-        if (!sessionId) return send(res, 400, { ok: false, error: 'missing sessionId' });
-        features.set(sessionId, Boolean(body.enabled));
-        log(`feature model-tools ${body.enabled ? 'on' : 'off'} → ${sessionId}`);
-        return send(res, 200, { ok: true, sessionId, enabled: features.isEnabled(sessionId) });
-      }
-      return send(res, 405, { ok: false, error: 'method not allowed' });
+      return serveFeatures(req, res, url);
     }
 
     if (req.method === 'GET' && url.pathname === '/health') {

@@ -44,8 +44,13 @@ window.__ModuleLoader__.load({
     // 桥的默认端口；改端口时同步改这里
     const BRIDGE = 'http://127.0.0.1:39881';
 
+    // 优先走 DSH 自己的 web 服务（同源，无跨端口 CORS）；不存在的部署回退到桥端口
     function endpoint(sessionId) {
-      return BRIDGE + '/features/model-tools?sessionId=' + encodeURIComponent(sessionId);
+      return '/session-bridge/features?sessionId=' + encodeURIComponent(sessionId);
+    }
+
+    function postUrl() {
+      return '/session-bridge/features';
     }
 
     // 模块级缓存 + 单飞：菜单在会话忙碌时会频繁重挂载，重挂载时直接用上次的状态，
@@ -143,7 +148,7 @@ window.__ModuleLoader__.load({
         if (busy) return;
         setBusy(true);
         setFailure('');
-        fetch(BRIDGE + '/features/model-tools', {
+        fetch(postUrl(), {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ sessionId: sessionId, enabled: next }),
