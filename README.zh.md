@@ -5,6 +5,16 @@
 
 [English](./README.md) | 简体中文
 
+<!-- 截图就位后取消注释：
+<p align="center">
+  <img src="./assets/model-switch.png" alt="composer switch" width="70%" />
+</p>
+-->
+
+## Screenshots
+
+_待补：模型菜单里的同意开关、一次生成结果。文件命名与位置见 [`assets/README.md`](./assets/README.md)。_
+
 本地运行的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）会话桥：
 **本地 HTTP 收件箱**把文字投进活会话、**按"目标同意"的跨会话换模型/发消息**、
 **图片 / 视频 / 音频生成**（九种 provider 后端）。
