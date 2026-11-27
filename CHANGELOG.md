@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.4 — 2026-11-28
+
+- 同源路由改用 ctx.inject(["webServer"]) 注册：插件 apply 时 web 服务可能尚未挂载，
+  之前路由没挂上，浏览器拿到 404/405 空响应（Unexpected end of JSON input）。
+
 ## 0.8.3 — 2026-11-28
 
 - 开关端点挂到 DSH 的 web 服务（/session-bridge/features），客户端改同源相对路径；

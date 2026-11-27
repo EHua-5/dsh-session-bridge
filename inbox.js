@@ -657,28 +657,32 @@ export function createBridge(ctx, options = {}) {
     return send(res, 405, { ok: false, error: 'method not allowed' });
   }
 
-  // 同一路径也挂到 DSH 自己的 web 服务上，客户端用相对路径访问（同源，无跨端口 CORS）
-  const webServer = typeof ctx.get === 'function' ? ctx.get('webServer') : undefined;
-  if (webServer && typeof webServer.register === 'function') {
-    try {
-      const disposeRoute = webServer.register({
-        kind: 'exact',
-        path: '/session-bridge/features',
-        handler: (req, res) => {
-          const url = new URL(req.url || '/', 'http://127.0.0.1');
-          void serveFeatures(req, res, url);
-        },
-      });
-      ctx.effect(() => () => {
-        try {
-          disposeRoute();
-        } catch {
-          // 已卸载
-        }
-      });
-    } catch {
-      // 路由已被占用：保留本机端口作为回退
-    }
+  // 同一路径也挂到 DSH 自己的 web 服务上，客户端用相对路径访问（同源，无跨端口 CORS）。
+  // 用 ctx.inject 等 webServer 服务就绪：插件 apply 时它可能还没挂载。
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['webServer'], (scope) => {
+      try {
+        const webServer = scope.webServer;
+        if (!webServer || typeof webServer.register !== 'function') return;
+        const disposeRoute = webServer.register({
+          kind: 'exact',
+          path: '/session-bridge/features',
+          handler: (req, res) => {
+            const url = new URL(req.url || '/', 'http://127.0.0.1');
+            void serveFeatures(req, res, url);
+          },
+        });
+        scope.effect(() => () => {
+          try {
+            disposeRoute();
+          } catch {
+            // 已卸载
+          }
+        });
+      } catch {
+        // 路由已被占用：保留本机端口作为回退
+      }
+    });
   }
 
   async function handle(req, res) {
